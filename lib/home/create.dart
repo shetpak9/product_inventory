@@ -29,7 +29,6 @@ class _CreateState extends State<Create> {
       resizeToAvoidBottomInset: true,
       backgroundColor: Colors.white,
       body: SafeArea(
-          
           child: SingleChildScrollView(
             child:Container(
             padding: EdgeInsets.symmetric(vertical: 10.0, horizontal: 40.0),
@@ -37,22 +36,16 @@ class _CreateState extends State<Create> {
               child: Column(
                 children: [
                   Image(image: 
-                    AssetImage('assets/rabbit-playing-ball-mascot-logo_530521-1534.png'),
+                    AssetImage('assets/pngwing.com(1).png'),
                     width: 300.0,
-                    height: 250.0,
-                  ),
-                  Text(
-                    'Hello',
-                    style: TextStyle(
-                      fontSize:50.0,
-                      fontWeight: FontWeight(1000),
-                    ),
+                    height: 200.0,
                   ),
                   SizedBox(height: 10.0,),
                   Text(
                     'Create a Product',
                     style: TextStyle(
-                      fontSize: 15.0,
+                      fontSize: 25.0,
+                      fontWeight: FontWeight(500)
                     ),
                   ),
                   Form(
@@ -91,7 +84,7 @@ class _CreateState extends State<Create> {
                         SizedBox(height: 16.0,),
                         ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.purple[400],
+                            backgroundColor: Colors.red[600],
                             foregroundColor: Colors.white
                           ),
                           child: Text(

@@ -1,13 +1,13 @@
 class Product {
   final String id;
   final String name;
-  final String type;
+  final String productType;
   final double price;
 
   Product({
     required this.id,
     required this.name,
-    required this.type,
+    required this.productType,
     required this.price,
   });
 }

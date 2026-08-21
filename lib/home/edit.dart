@@ -64,12 +64,12 @@ class _EditFormState extends State<EditForm> {
                     child: Text(item),
                   );
                 }).toList(),
-                onChanged: (value) => _currentProductType = value as String,
+                onChanged: (value) => setState(() => _currentProductType = value as String),
               ),
               SizedBox(height: 15.0,),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.purple[400],
+                  backgroundColor: Colors.red[600],
                   foregroundColor: Colors.white
                 ),
                 child: Text(
@@ -86,7 +86,7 @@ class _EditFormState extends State<EditForm> {
                     widget.product.id, 
                     _currentProductName ?? widget.product.name, 
                     _currentPrice ?? widget.product.price, 
-                    _currentProductType ?? widget.product.type
+                    _currentProductType ?? widget.product.productType
                   );
 
                   setState(() => loading = false);

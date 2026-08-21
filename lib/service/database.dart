@@ -28,7 +28,7 @@ class DatabaseService {
       await productRef.child(productId).update({
         'name' : name,
         'price': price,
-        'type': productType,
+        'productType': productType,
       });
       return true;
     }
@@ -63,7 +63,7 @@ class DatabaseService {
       return Product(
         id: entry.key.toString(),
         name: product['name'] as String,
-        type: product['productType'] as String,
+        productType: product['productType'] as String,
         price: (product['price'] as num).toDouble(),
       );
     }).toList();  
@@ -87,7 +87,7 @@ class DatabaseService {
       return Product(
         id: productId, 
         name: product['name'] as String, 
-        type: product['productType'] as String, 
+        productType: product['productType'] as String, 
         price: (product['price'] as num).toDouble(),
       );
     });

@@ -25,22 +25,16 @@ class _ShowState extends State<Show> {
             child: Column(
               children: [
                 Image(
-                  image: AssetImage('assets/rabbit-playing-ball-mascot-logo_530521-1534.png'),
+                  image: AssetImage('assets/pngwing.com(1).png'),
                   width: 300,
-                  height: 250,
-                ),
-                Text(
-                  'Hello',
-                  style: TextStyle(
-                    fontSize: 50.0,
-                    fontWeight: FontWeight(1000)
-                  ),
+                  height: 200,
                 ),
                 SizedBox(height: 10.0,),
                 Text(
                   'Product List',
                   style: TextStyle(
-                    fontSize: 15.0,
+                    fontSize: 25.0,
+                    fontWeight: FontWeight(500)
                   ),
                 ),
                 Expanded(child: ProductList())
