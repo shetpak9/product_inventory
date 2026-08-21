@@ -106,6 +106,8 @@ class _CreateState extends State<Create> {
                             setState(() => loading = true);
                             final success = await DatabaseService().addProduct(productName,price,productType);
 
+                            if(!mounted) return;
+
                             setState(() {
                               error = success ? 'Product Created' : 'Error occurred';
                               productName = '';
@@ -118,6 +120,8 @@ class _CreateState extends State<Create> {
                             _priceController.clear();
 
                             await Future.delayed(const Duration(seconds: 2));
+                            
+                            if(!mounted) return;
 
                             setState(() {
                               error = '';
