@@ -30,7 +30,7 @@ class Producttile extends StatelessWidget {
         margin: EdgeInsets.fromLTRB(20.0, 6.0, 20.0, 0.0),
         child: ListTile(
           leading: Icon(Icons.paste_rounded),
-          title: Text("${product.name} - ${product.type}"),
+          title: Text("${product.name} - ${product.productType}"),
           subtitle: Text("P${product.price}"),
           trailing: PopupMenuButton<String>(
             onSelected: (value) async {
