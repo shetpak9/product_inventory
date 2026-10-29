@@ -38,6 +38,10 @@ dependencies:
   firebase_database: ^12.4.7
   firebase_auth: ^6.5.7
   flutter_spinkit: ^5.2.2
+  provider: ^6.1.5+1
+  http: ^1.6.0
+  image_picker: ^1.2.4
+  flutter_local_notifications: ^22.3.2
 
 dev_dependencies:
   flutter_test:
