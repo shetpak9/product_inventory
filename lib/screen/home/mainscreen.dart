@@ -6,11 +6,13 @@ import 'package:product_inventory/screen/home/cart.dart';
 import 'package:product_inventory/screen/home/favorites_screen.dart';
 import 'package:product_inventory/screen/home/home_screen.dart';
 import 'package:product_inventory/screen/home/my_orders.dart';
+import 'package:product_inventory/screen/home/payment_waiting.dart';
 import 'package:product_inventory/screen/home/shop.dart';
 import 'package:product_inventory/screen/account/profile_screen.dart';
 import 'package:product_inventory/service/auth_service.dart';
 import 'package:product_inventory/service/favorites_store.dart';
 import 'package:product_inventory/service/order_notifier.dart';
+import 'package:product_inventory/service/payment_link_service.dart';
 import 'package:product_inventory/shared/app_theme.dart';
 
 class MainScreen extends StatefulWidget {
@@ -23,6 +25,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
   String? _notifierUid;
+  StreamSubscription<PaymentLink>? _paymentLinkSubscription;
 
   final List<Widget> _pages = const <Widget>[
     HomeScreen(),
@@ -50,6 +53,15 @@ class _MainScreenState extends State<MainScreen> {
         ),
       );
     }
+    _paymentLinkSubscription = PaymentLinkService.instance.links.listen(
+      _handlePaymentLink,
+    );
+    final PaymentLink? pendingLink = PaymentLinkService.instance.takePending();
+    if (pendingLink != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _handlePaymentLink(pendingLink),
+      );
+    }
     unawaited(_preload());
   }
 
@@ -57,7 +69,33 @@ class _MainScreenState extends State<MainScreen> {
   void dispose() {
     final String? uid = _notifierUid;
     if (uid != null) unawaited(OrderNotifier.instance.stop(uid));
+    _paymentLinkSubscription?.cancel();
     super.dispose();
+  }
+
+  void _handlePaymentLink(PaymentLink link) {
+    if (!mounted || AuthService().currentUser == null) return;
+    PaymentLinkService.instance.takePending();
+    final NavigatorState? navigator =
+        _navigatorKeys[_currentIndex].currentState;
+    if (navigator == null) return;
+    if (link.result == 'cancel') {
+      navigator.push(
+        MaterialPageRoute<void>(
+          builder: (_) => CustomerOrderDetailScreen(
+            orderId: link.orderId,
+            initialMessage:
+                'Payment was not completed. You can try paying again',
+          ),
+        ),
+      );
+      return;
+    }
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (_) => PaymentWaitingScreen(orderId: link.orderId),
+      ),
+    );
   }
 
   /// Warms the cart and favorites so badges and hearts are ready.

@@ -527,7 +527,20 @@ class DatabaseService {
           'updatedAt': ServerValue.timestamp,
         };
       }
-      await _db.update(updates);
+      try {
+        await _db.update(updates);
+      } on FirebaseException catch (error) {
+        if (error.code == 'permission-denied' ||
+            error.message?.toLowerCase().contains('permission denied') ==
+                true) {
+          throw StateError(
+            'Firebase denied the order write. Publish the current '
+            'database.rules.json and verify the signed-in customer, store, '
+            'product, and fulfillment data are valid.',
+          );
+        }
+        rethrow;
+      }
       return orderIds;
     } catch (error) {
       for (final _ProductCountReservation reservation

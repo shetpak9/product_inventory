@@ -1,4 +1,4 @@
-{
+﻿{
   "rules": {
     "users": {
       "$uid": {
@@ -296,7 +296,7 @@
         "fulfillment": {
           ".validate": "newData.hasChildren(['type', 'date']) && ((newData.child('type').val() === 'delivery' && newData.hasChild('address')) || (newData.child('type').val() === 'pickup' && !newData.hasChild('address')))",
           "type": {
-            ".validate": "newData.isString() && ((!data.exists() && ((newData.val() === 'pickup' && (root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('fulfillment').child('pickupEnabled').val() === true || (!root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('fulfillment').exists() && root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('pickupEnabled').val() === true))) || (newData.val() === 'delivery' && (root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('fulfillment').child('deliveryEnabled').val() === true || (!root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('fulfillment').exists() && root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('deliveryEnabled').val() === true)))) || (data.exists() && newData.val() === data.val())))"
+            ".validate": "newData.isString() && ((!data.exists() && ((newData.val() === 'pickup' && (root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('fulfillment').child('pickupEnabled').val() === true || (!root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('fulfillment').exists() && root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('pickupEnabled').val() !== false))) || (newData.val() === 'delivery' && (root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('fulfillment').child('deliveryEnabled').val() === true || (!root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('fulfillment').exists() && root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('deliveryEnabled').val() === true))))) || (data.exists() && newData.val() === data.val()))"
           },
           "date": {
             ".validate": "newData.isString() && newData.val().matches(/^\\d{4}-\\d{2}-\\d{2}$/) && (!data.exists() && ((!root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('fulfillment').exists() && !root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('closedDates').child(newData.val()).exists()) || (root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('fulfillment').exists() && !root.child('stores').child(newData.parent().parent().child('sellerId').val()).child('fulfillment').child('closedDates').child(newData.val()).exists())) || data.exists() && newData.val() === data.val())"
@@ -349,10 +349,16 @@
           ".validate": "newData.val() === 'pending' || newData.val() === 'accepted' || newData.val() === 'baking' || newData.val() === 'ready' || newData.val() === 'out_for_delivery' || newData.val() === 'delivered' || newData.val() === 'cancelled'"
         },
         "paymentMethod": {
-          ".validate": "newData.isString() && (!data.exists() || newData.val() === data.val())"
+          ".validate": "newData.isString() && (newData.val() === 'cash' || newData.val() === 'paymongo') && (!data.exists() || newData.val() === data.val())"
         },
         "paymentStatus": {
-          ".validate": "newData.isString() && newData.val().length <= 30 && (!data.exists() || newData.val() === data.val())"
+          ".validate": "newData.isString() && (newData.val() === 'unpaid' || newData.val() === 'pending' || newData.val() === 'paid' || newData.val() === 'failed') && (!data.exists() || newData.val() === data.val())"
+        },
+        "paymongoCheckoutSessionId": {
+          ".validate": "newData.isString() && newData.val().length <= 100 && (!data.exists() || newData.val() === data.val())"
+        },
+        "paymongoPaymentId": {
+          ".validate": "newData.isString() && newData.val().length <= 100 && (!data.exists() || newData.val() === data.val())"
         },
         "createdAt": {
           ".validate": "newData.isNumber() && (!data.exists() || newData.val() === data.val())"

@@ -4,6 +4,7 @@ import 'package:product_inventory/model/user.dart';
 import 'package:product_inventory/screen/wrapper.dart';
 import 'package:product_inventory/service/auth_service.dart';
 import 'package:product_inventory/service/order_notifier.dart';
+import 'package:product_inventory/service/payment_link_service.dart';
 import 'package:product_inventory/shared/app_theme.dart';
 import 'package:product_inventory/shared/messenger.dart';
 import 'package:provider/provider.dart';
@@ -12,18 +13,17 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
+    await Firebase.initializeApp();
+  } catch (error) {
+    debugPrint('Firebase initialization failed: $error');
+  }
+
+  try {
     await OrderNotifier.instance.initialize();
   } catch (error) {
     debugPrint('Local notification initialization failed: $error');
   }
-
-  try {
-    await Firebase.initializeApp();
-  } catch (_) {
-    debugPrint(
-      'Firebase was not available in this environment; falling back to a signed-out app state.',
-    );
-  }
+  await PaymentLinkService.instance.initialize();
 
   runApp(const MyApp());
 }

@@ -87,9 +87,14 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
 }
 
 class CustomerOrderDetailScreen extends StatefulWidget {
-  const CustomerOrderDetailScreen({super.key, required this.orderId});
+  const CustomerOrderDetailScreen({
+    super.key,
+    required this.orderId,
+    this.initialMessage,
+  });
 
   final String orderId;
+  final String? initialMessage;
 
   @override
   State<CustomerOrderDetailScreen> createState() =>
@@ -102,6 +107,20 @@ class _CustomerOrderDetailScreenState extends State<CustomerOrderDetailScreen> {
     widget.orderId,
   );
   bool _cancelling = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final String? message = widget.initialMessage;
+    if (message != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+      });
+    }
+  }
 
   Future<void> _cancel(Order order) async {
     final bool? confirmed = await showDialog<bool>(
@@ -176,6 +195,11 @@ class _CustomerOrderDetailScreenState extends State<CustomerOrderDetailScreen> {
         ),
         const SizedBox(height: 8),
         _StatusChip(status: order.status),
+        const SizedBox(height: 6),
+        Text(
+          'Payment: ${_paymentLabel(order)}',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
         const SizedBox(height: 20),
         Text('Order progress', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
@@ -275,6 +299,15 @@ class _CustomerOrderDetailScreenState extends State<CustomerOrderDetailScreen> {
         ],
       ],
     );
+  }
+
+  String _paymentLabel(Order order) {
+    if (order.paymentMethod != 'paymongo') return 'Cash on delivery';
+    return switch (order.paymentStatus) {
+      'paid' => 'Paid',
+      'failed' => 'Payment failed',
+      _ => 'Awaiting payment',
+    };
   }
 }
 

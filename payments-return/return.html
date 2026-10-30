@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Returning to Alas Pandesal</title>
+  </head>
+  <body>
+    <main>
+      <h1>Returning to the app</h1>
+      <p id="message">Opening Alas Pandesal...</p>
+      <a id="open-app" href="#" hidden>Open the app</a>
+    </main>
+    <script>
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        const orderId = params.get("orderId") || "";
+        const result = params.get("result") || "";
+        const validOrderId = /^[A-Za-z0-9_-]{1,128}$/.test(orderId);
+        const validResult = result === "success" || result === "cancel";
+        const message = document.getElementById("message");
+        const button = document.getElementById("open-app");
+
+        if (!validOrderId || !validResult) {
+          message.textContent = "This payment return link is not valid.";
+          return;
+        }
+
+        const appLink = "alaspandesal://payment-result?orderId=" +
+          encodeURIComponent(orderId) + "&result=" + encodeURIComponent(result);
+        button.href = appLink;
+        button.hidden = false;
+        window.location = appLink;
+      }());
+    </script>
+  </body>
+</html>

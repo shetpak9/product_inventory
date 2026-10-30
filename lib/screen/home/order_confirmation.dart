@@ -7,10 +7,12 @@ class OrderConfirmationScreen extends StatelessWidget {
     super.key,
     required this.orderCount,
     required this.total,
+    this.paymentConfirmed = false,
   });
 
   final int orderCount;
   final double total;
+  final bool paymentConfirmed;
 
   @override
   Widget build(BuildContext context) {
@@ -22,18 +24,24 @@ class OrderConfirmationScreen extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                const Icon(Icons.check_circle_outline, size: 64),
-                const SizedBox(height: 20),
+                if (paymentConfirmed) ...<Widget>[
+                  const Icon(Icons.check_circle_outline, size: 64),
+                  const SizedBox(height: 20),
+                ],
                 Text(
-                  'Thank you for shopping with us!',
+                  paymentConfirmed
+                      ? 'Thank you for shopping with us!'
+                      : 'Your order has been placed.',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 12),
-                const Text(
-                  'Your order has been recorded. No payment was processed in the app.',
+                Text(
+                  paymentConfirmed
+                      ? 'Your payment has been confirmed.'
+                      : 'Your order has been recorded. No payment was processed in the app.',
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 24),

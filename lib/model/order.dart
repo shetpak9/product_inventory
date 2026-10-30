@@ -197,6 +197,8 @@ class Order {
     this.note,
     this.paymentMethod = 'cash',
     this.paymentStatus = 'unpaid',
+    this.paymongoCheckoutSessionId,
+    this.paymongoPaymentId,
   });
 
   final String id;
@@ -212,6 +214,8 @@ class Order {
   final OrderStatus status;
   final String paymentMethod;
   final String paymentStatus;
+  final String? paymongoCheckoutSessionId;
+  final String? paymongoPaymentId;
   final int? createdAt;
   final int? updatedAt;
   final OrderFulfillment fulfillment;
@@ -234,7 +238,9 @@ class Order {
     if (note != null && note!.isNotEmpty) 'note': note,
     'status': status.dbValue,
     'paymentMethod': paymentMethod,
-    'paymentStatus': paymentStatus,
+    if (paymongoCheckoutSessionId != null)
+      'paymongoCheckoutSessionId': paymongoCheckoutSessionId,
+    if (paymongoPaymentId != null) 'paymongoPaymentId': paymongoPaymentId,
     'createdAt': createdAt,
     'updatedAt': updatedAt,
   };
@@ -277,6 +283,8 @@ class Order {
       status: OrderStatus.fromDbValue(map['status']?.toString()),
       paymentMethod: map['paymentMethod']?.toString() ?? 'cash',
       paymentStatus: map['paymentStatus']?.toString() ?? 'unpaid',
+      paymongoCheckoutSessionId: map['paymongoCheckoutSessionId']?.toString(),
+      paymongoPaymentId: map['paymongoPaymentId']?.toString(),
       createdAt: (map['createdAt'] as num?)?.toInt(),
       updatedAt: (map['updatedAt'] as num?)?.toInt(),
     );

@@ -9,9 +9,11 @@ import 'package:product_inventory/model/store.dart';
 import 'package:product_inventory/model/user.dart';
 import 'package:product_inventory/screen/home/cart.dart';
 import 'package:product_inventory/screen/home/order_confirmation.dart';
+import 'package:product_inventory/screen/home/payment_waiting.dart';
 import 'package:product_inventory/screen/account/profile_screen.dart'
     show AddressFormScreen, EditProfileScreen;
 import 'package:product_inventory/service/database.dart';
+import 'package:product_inventory/service/payment_service.dart';
 import 'package:product_inventory/shared/app_theme.dart';
 import 'package:product_inventory/shared/product_thumb.dart';
 import 'package:product_inventory/shared/option_summary.dart';
@@ -27,10 +29,12 @@ class CheckoutScreen extends StatefulWidget {
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
   bool _isPaying = false;
+  String _paymentMethod = 'cash';
   bool _loadingStores = true;
   String? _storeLoadError;
   late List<CartItem> _items;
   final DatabaseService _database = DatabaseService();
+  final PaymentService _payments = PaymentService();
   final TextEditingController _noteController = TextEditingController();
   final Map<String, Store> _stores = <String, Store>{};
   final Map<String, FulfillmentType> _fulfillmentTypes =
@@ -445,9 +449,24 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             _fulfillmentDates[group.key]!,
             _selectedAddress(group.key),
             _timeSlots[group.key],
+            paymentMethod: _paymentMethod,
           ),
       ];
-      await _database.placeOrders(orders);
+      if (_paymentMethod == 'paymongo' && orders.length != 1) {
+        throw StateError(
+          'PayMongo checkout currently supports one seller order at a time. '
+          'Choose cash on delivery for a multi-seller cart.',
+        );
+      }
+      final List<String> orderIds = await _database.placeOrders(orders);
+      String? checkoutUrl;
+      if (_paymentMethod == 'paymongo') {
+        checkoutUrl = await _payments.createCheckout(orderIds.single);
+        final bool opened = await _payments.openCheckout(checkoutUrl);
+        if (!opened) {
+          throw StateError('Could not open the PayMongo checkout page.');
+        }
+      }
 
       try {
         await CartStore.instance.clear();
@@ -456,17 +475,29 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
 
       if (!mounted) return;
-      await Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => OrderConfirmationScreen(
-            orderCount: orders.length,
-            total: orders.fold<double>(
-              0,
-              (double sum, Order order) => sum + order.total,
+      final double total = orders.fold<double>(
+        0,
+        (double sum, Order order) => sum + order.total,
+      );
+      if (_paymentMethod == 'paymongo') {
+        await Navigator.of(context).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (_) => PaymentWaitingScreen(
+              orderId: orderIds.single,
+              checkoutUrl: checkoutUrl,
             ),
           ),
-        ),
-      );
+        );
+      } else {
+        await Navigator.of(context).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (_) => OrderConfirmationScreen(
+              orderCount: orders.length,
+              total: total,
+            ),
+          ),
+        );
+      }
     } catch (error) {
       debugPrint('Checkout failed: $error');
       if (!mounted) return;
@@ -567,8 +598,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     FulfillmentType fulfillmentType,
     DateTime fulfillmentDate,
     Address? address,
-    String? timeSlot,
-  ) {
+    String? timeSlot, {
+    required String paymentMethod,
+  }) {
     final List<OrderItem> orderItems = items
         .map(
           (CartItem item) => OrderItem(
@@ -613,6 +645,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       ),
       note: note.isEmpty ? null : note,
       status: OrderStatus.pending,
+      paymentMethod: paymentMethod,
       createdAt: null,
       updatedAt: null,
     );
@@ -906,6 +939,39 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                               alignLabelWithHint: true,
                             ),
                           ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Payment method',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          SegmentedButton<String>(
+                            segments: <ButtonSegment<String>>[
+                              const ButtonSegment<String>(
+                                value: 'cash',
+                                label: Text('Cash'),
+                                icon: Icon(Icons.payments_outlined),
+                              ),
+                              if (groups.length == 1)
+                                const ButtonSegment<String>(
+                                  value: 'paymongo',
+                                  label: Text('PayMongo'),
+                                  icon: Icon(Icons.credit_card_outlined),
+                                ),
+                            ],
+                            selected: <String>{_paymentMethod},
+                            onSelectionChanged: _isPaying
+                                ? null
+                                : (Set<String> selection) => setState(
+                                    () => _paymentMethod = selection.first,
+                                  ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            groups.length > 1
+                                ? 'PayMongo is available for one seller order at a time.'
+                                : 'PayMongo is a test checkout; payment is confirmed by webhook.',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
                         ],
                       ),
               ),
@@ -926,8 +992,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 ],
               ),
               const SizedBox(height: 12),
-              const Text(
-                'Payment is cash on delivery. No payment is processed in the app.',
+              Text(
+                _paymentMethod == 'paymongo'
+                    ? 'PayMongo test checkout opens in your browser. Returning to the app does not confirm payment; only a verified webhook does.'
+                    : 'Cash on delivery/pickup. No payment is processed in the app.',
               ),
               const SizedBox(height: 16),
               ElevatedButton.icon(
@@ -948,7 +1016,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                         ),
                       )
                     : const Icon(Icons.receipt_long_outlined),
-                label: Text(_isPaying ? 'Placing order...' : 'Place Order'),
+                label: Text(
+                  _isPaying
+                      ? 'Processing...'
+                      : _paymentMethod == 'paymongo'
+                      ? 'Continue to PayMongo'
+                      : 'Place Order',
+                ),
               ),
             ],
           ),
