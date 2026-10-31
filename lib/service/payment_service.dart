@@ -30,31 +30,30 @@ class PaymentService {
       throw StateError('A signed-in user is required to start payment.');
     }
     try {
-      final String token = await user.getIdToken(true) ?? '';
+      debugPrint('[CHECKOUT] Firebase ID token refresh started');
+      final String token = await user
+              .getIdToken(true)
+              .timeout(const Duration(seconds: 15)) ??
+          '';
       if (token.isEmpty) {
         throw StateError(
           'Your sign-in session has expired. Please sign in again.',
         );
       }
+      debugPrint('[CHECKOUT] Firebase ID token acquired');
+      final Uri checkoutUri = Uri.parse('$_baseUrl/api/payments/checkout');
+      debugPrint('[CHECKOUT] Request started: ${checkoutUri.host}:${checkoutUri.port}');
       final http.Response response = await _client
           .post(
-            Uri.parse('$_baseUrl/api/payments/checkout'),
+            checkoutUri,
             headers: <String, String>{
-              'Authorization': String.fromCharCodes(<int>[
-                    66,
-                    101,
-                    97,
-                    114,
-                    101,
-                    114,
-                    32,
-                  ]) +
-                  token,
+              'Authorization': 'Bearer $token',
               'Content-Type': 'application/json',
             },
             body: jsonEncode(<String, String>{'orderId': orderId}),
           )
           .timeout(const Duration(seconds: 20));
+      debugPrint('[CHECKOUT] Response received: HTTP ${response.statusCode}');
       dynamic decoded;
       try {
         decoded = jsonDecode(response.body);
@@ -82,10 +81,12 @@ class PaymentService {
       }
       return url;
     } on TimeoutException {
+      debugPrint('[CHECKOUT] Request or token refresh timed out');
       throw StateError(
         'The payment service took too long to respond. Check your connection and try again.',
       );
     } on SocketException {
+      debugPrint('[CHECKOUT] Connection failed');
       throw StateError(
         'Could not connect to the payment service. Make sure the backend is running.',
       );

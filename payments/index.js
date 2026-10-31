@@ -62,6 +62,22 @@ function database() {
 }
 const PAYMONGO_URL = "https://api.paymongo.com/v2/checkout_sessions";
 const PAYMENT_METHODS = ["card", "gcash", "qrph"];
+const CHECKOUT_OPERATION_TIMEOUT_MS = 15000;
+
+function elapsed(startedAt) {
+  return `${Date.now() - startedAt}ms`;
+}
+
+function withTimeout(operation, timeoutMs, label) {
+  let timer;
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${timeoutMs}ms.`)),
+      timeoutMs,
+    );
+  });
+  return Promise.race([operation, timeout]).finally(() => clearTimeout(timer));
+}
 
 function paymentReturnBaseUrl() {
   const value = String(process.env.PAYMENT_RETURN_BASE_URL || "").trim();
@@ -91,17 +107,35 @@ function bearerToken(request) {
 }
 
 async function authenticate(request, response) {
+  const startedAt = Date.now();
+  console.log("[CHECKOUT] Firebase token verification started");
   const token = bearerToken(request);
   if (!token) {
+    console.warn(`[CHECKOUT] Missing Firebase token (${elapsed(startedAt)})`);
     jsonError(response, 401, "A Firebase Authentication token is required.");
     return null;
   }
   try {
     const { getAuth } = require("firebase-admin/auth");
-    return await getAuth().verifyIdToken(token);
+    const decoded = await withTimeout(
+      getAuth().verifyIdToken(token),
+      CHECKOUT_OPERATION_TIMEOUT_MS,
+      "Firebase token verification",
+    );
+    console.log(`[CHECKOUT] Firebase token verified (${elapsed(startedAt)})`);
+    return decoded;
   } catch (error) {
-    console.warn("Payment authentication failed:", error.message);
-    jsonError(response, 401, "The Firebase Authentication token is invalid.");
+    console.warn(
+      `[CHECKOUT] Firebase token verification failed (${elapsed(startedAt)}): ${error.message}`,
+    );
+    const status = error.message.includes("timed out") ? 504 : 401;
+    jsonError(
+      response,
+      status,
+      status === 504
+        ? "Firebase Authentication took too long to respond."
+        : "The Firebase Authentication token is invalid.",
+    );
     return null;
   }
 }
@@ -258,6 +292,8 @@ async function validateAndPriceOrder(orderId, uid) {
 
 async function createCheckout(request, response) {
   if (request.method !== "POST") return jsonError(response, 405, "POST is required.");
+  const startedAt = Date.now();
+  console.log("[CHECKOUT] Request received");
   const decoded = await authenticate(request, response);
   if (!decoded) return;
   const body = asMap(request.body);
@@ -266,8 +302,15 @@ async function createCheckout(request, response) {
     return jsonError(response, 400, "A valid orderId is required.");
   }
   try {
-    const priced = await validateAndPriceOrder(orderId, decoded.uid);
+    console.log(`[CHECKOUT] Order validation started (${elapsed(startedAt)})`);
+    const priced = await withTimeout(
+      validateAndPriceOrder(orderId, decoded.uid),
+      CHECKOUT_OPERATION_TIMEOUT_MS,
+      "Order validation and Realtime Database reads",
+    );
+    console.log(`[CHECKOUT] Order and products validated (${elapsed(startedAt)})`);
     if (priced.order.paymentStatus === "pending" && priced.order.paymongoCheckoutUrl) {
+      console.log(`[CHECKOUT] Reusing existing checkout session (${elapsed(startedAt)})`);
       return response.json({
         orderId,
         checkoutSessionId: priced.order.paymongoCheckoutSessionId,
@@ -297,14 +340,21 @@ async function createCheckout(request, response) {
         },
       },
     };
-    const paymongoResponse = await fetch(PAYMONGO_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${secret}:`).toString("base64")}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+    console.log(`[CHECKOUT] PayMongo request started (${elapsed(startedAt)})`);
+    const paymongoResponse = await withTimeout(
+      fetch(PAYMONGO_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${secret}:`).toString("base64")}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(CHECKOUT_OPERATION_TIMEOUT_MS),
+      }),
+      CHECKOUT_OPERATION_TIMEOUT_MS,
+      "PayMongo checkout request",
+    );
+    console.log(`[CHECKOUT] PayMongo response received (${elapsed(startedAt)})`);
     const result = await paymongoResponse.json();
     if (!paymongoResponse.ok) {
       console.warn("PayMongo checkout creation failed:", paymongoResponse.status);
@@ -316,18 +366,34 @@ async function createCheckout(request, response) {
     if (!data?.id || typeof checkoutUrl !== "string" || !checkoutUrl.startsWith("https://")) {
       throw new Error("PayMongo returned an invalid checkout session.");
     }
-    await database().ref(`orders/${orderId}`).update({
-      paymentStatus: "pending",
-      paymongoCheckoutSessionId: data.id,
-      paymongoCheckoutUrl: checkoutUrl,
-      paymentAmount: amountInCentavos(priced.total),
-      paymentCurrency: "PHP",
-      updatedAt: Date.now(),
-    });
+    await withTimeout(
+      database().ref(`orders/${orderId}`).update({
+        paymentStatus: "pending",
+        paymongoCheckoutSessionId: data.id,
+        paymongoCheckoutUrl: checkoutUrl,
+        paymentAmount: amountInCentavos(priced.total),
+        paymentCurrency: "PHP",
+        updatedAt: Date.now(),
+      }),
+      CHECKOUT_OPERATION_TIMEOUT_MS,
+      "Realtime Database order update",
+    );
+    console.log(`[CHECKOUT] Order updated (${elapsed(startedAt)})`);
+    console.log(`[CHECKOUT] Checkout response sent (${elapsed(startedAt)})`);
     return response.json({ orderId, checkoutSessionId: data.id, checkoutUrl });
   } catch (error) {
-    console.warn("Checkout initiation failed:", error.message);
-    return jsonError(response, 400, error.message);
+    console.warn(`[CHECKOUT] Failed after ${elapsed(startedAt)}: ${error.message}`);
+    const status = error.message.includes("timed out") ||
+        error.name === "TimeoutError" || error.name === "AbortError"
+      ? 504
+      : 400;
+    return jsonError(
+      response,
+      status,
+      status === 504
+        ? "The payment service took too long to respond."
+        : error.message,
+    );
   }
 }
 
