@@ -52,3 +52,8 @@ app.*.map.json
 .env.*
 !.env.example
 !.env.*.example
+
+# Firebase service-account credential files
+**/*service-account*.json
+**/*firebase-adminsdk*.json
+**/serviceAccount*.json
