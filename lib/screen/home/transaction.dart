@@ -36,6 +36,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   final DatabaseService _database = DatabaseService();
   final PaymentService _payments = PaymentService();
   final TextEditingController _noteController = TextEditingController();
+  final TextEditingController _discountCodeController = TextEditingController();
+  double _discountAmount = 0;
+  double? _validatedFinalTotal;
   final Map<String, Store> _stores = <String, Store>{};
   final Map<String, FulfillmentType> _fulfillmentTypes =
       <String, FulfillmentType>{};
@@ -182,6 +185,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   @override
   void dispose() {
     _noteController.dispose();
+    _discountCodeController.dispose();
     super.dispose();
   }
 
@@ -232,7 +236,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   Future<void> _pay() async {
+    if (_isPaying) return;
     setState(() => _isPaying = true);
+    List<String> placedOrderIds = <String>[];
 
     try {
       final User? user = FirebaseAuth.instance.currentUser;
@@ -319,6 +325,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           );
         } else if (!product.isAvailable) {
           issues.add('${product.name} is no longer available.');
+        }
+        if (product.stockQuantity != null &&
+            oldItem.quantity > product.stockQuantity!) {
+          issues.add(
+            '${product.name} only has ${product.stockQuantity} in stock.',
+          );
         }
         if (oldItem.price != product.price) {
           issues.add(
@@ -458,7 +470,23 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           'Choose cash on delivery for a multi-seller cart.',
         );
       }
+      if (_discountCodeController.text.trim().isNotEmpty &&
+          orders.length != 1) {
+        throw StateError(
+          'Discount codes currently apply to one seller order at a time.',
+        );
+      }
       final List<String> orderIds = await _database.placeOrders(orders);
+      placedOrderIds = orderIds;
+      if (_discountCodeController.text.trim().isNotEmpty) {
+        final ({double discountAmount, double finalTotal}) discount =
+            await _payments.applyDiscount(
+              orderIds.single,
+              _discountCodeController.text.trim(),
+            );
+        _discountAmount = discount.discountAmount;
+        _validatedFinalTotal = discount.finalTotal;
+      }
       String? checkoutUrl;
       if (_paymentMethod == 'paymongo') {
         checkoutUrl = await _payments.createCheckout(orderIds.single);
@@ -479,6 +507,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         0,
         (double sum, Order order) => sum + order.total,
       );
+      final double finalTotal = _validatedFinalTotal ?? total - _discountAmount;
       if (_paymentMethod == 'paymongo') {
         await Navigator.of(context).pushReplacement(
           MaterialPageRoute<void>(
@@ -493,7 +522,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           MaterialPageRoute<void>(
             builder: (_) => OrderConfirmationScreen(
               orderCount: orders.length,
-              total: total,
+              total: finalTotal,
             ),
           ),
         );
@@ -502,6 +531,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       debugPrint('Checkout failed: $error');
       if (!mounted) return;
       setState(() => _isPaying = false);
+      if (_paymentMethod == 'paymongo' && placedOrderIds.length == 1) {
+        await Navigator.of(context).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                PaymentWaitingScreen(orderId: placedOrderIds.single),
+          ),
+        );
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -940,6 +978,18 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                             ),
                           ),
                           const SizedBox(height: 16),
+                          if (groups.length == 1) ...<Widget>[
+                            TextField(
+                              controller: _discountCodeController,
+                              enabled: !_isPaying,
+                              textCapitalization: TextCapitalization.characters,
+                              decoration: const InputDecoration(
+                                labelText: 'Discount code (optional)',
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                          ],
                           const Text(
                             'Payment method',
                             style: TextStyle(fontWeight: FontWeight.w600),
@@ -986,7 +1036,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                   Text(
-                    formatPeso(_total),
+                    formatPeso(
+                      _validatedFinalTotal ?? _total - _discountAmount,
+                    ),
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ],

@@ -146,6 +146,21 @@ function asMap(value) {
     : null;
 }
 
+async function writeCustomerNotification(order, type, title, body) {
+  if (!order?.customerId || !order?.id) return;
+  const notificationId = `order_${order.id}_${type}`;
+  await database().ref(
+    `notifications/${order.customerId}/${notificationId}`,
+  ).set({
+    type,
+    title,
+    body,
+    orderId: order.id,
+    createdAt: Date.now(),
+    read: false,
+  });
+}
+
 function money(value, label) {
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0 || number > 1000000) {
@@ -216,8 +231,115 @@ function parseItems(rawItems) {
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
       throw new Error("The order contains an invalid quantity.");
     }
+
     return { ...value, quantity };
   });
+}
+
+async function claimCheckout(orderId) {
+  const lockRef = database().ref(`paymentCheckoutLocks/${orderId}`);
+  const now = Date.now();
+  const result = await lockRef.transaction((current) => {
+    if (typeof current === "number" && now - current < 120000) return;
+    return now;
+  });
+  return {
+    claimed: result.committed,
+    release: () => lockRef.remove(),
+  };
+}
+
+function promotionDiscount(promotion, order, subtotal) {
+  const now = Date.now();
+  if (!promotion || promotion.sellerId !== order.sellerId) {
+    throw new Error("Discount code is not valid for this store.");
+  }
+  if (promotion.productId) {
+    const appliesToProduct = Object.values(asMap(order.items) || {}).some(
+      (item) => asMap(item)?.productId === promotion.productId,
+    );
+    if (!appliesToProduct) throw new Error("This discount code does not apply to this order.");
+  }
+  if (now < Number(promotion.startsAt) || now > Number(promotion.endsAt)) {
+    throw new Error("This discount code is not currently active.");
+  }
+  if (promotion.usageLimit != null &&
+      Number(promotion.usageCount || 0) >= Number(promotion.usageLimit)) {
+    throw new Error("This discount code has reached its usage limit.");
+  }
+  if (subtotal < Number(promotion.minOrderAmount || 0)) {
+    throw new Error("The order does not meet the minimum amount for this code.");
+  }
+  const value = Number(promotion.value);
+  if (!Number.isFinite(value) || value <= 0 ||
+      (promotion.type === "percentage" && value > 100)) {
+    throw new Error("This discount code is invalid.");
+  }
+  const discount = promotion.type === "percentage"
+    ? subtotal * value / 100
+    : value;
+  return Math.min(subtotal, Math.max(0, Math.round(discount * 100) / 100));
+}
+
+async function applyDiscountToOrder(orderId, uid, code) {
+  const snapshot = await database().ref(`orders/${orderId}`).get();
+  const order = asMap(snapshot.val());
+  if (!order || order.customerId !== uid) throw new Error("Order not found.");
+  if (order.discountPromotionId) {
+    return {
+      discountAmount: Number(order.discountAmount || 0),
+      finalTotal: Number(order.finalTotal || order.total),
+    };
+  }
+  const normalizedCode = String(code || "").trim().toUpperCase();
+  if (!/^[A-Z0-9_-]{3,30}$/.test(normalizedCode)) {
+    throw new Error("Enter a valid discount code.");
+  }
+  const promotionSnapshot = await database()
+    .ref(`promotions/${order.sellerId}/${normalizedCode}`).get();
+  const promotion = {
+    ...asMap(promotionSnapshot.val()),
+    id: normalizedCode,
+  };
+  const subtotal = Number(order.subtotal);
+  const discountAmount = promotionDiscount(promotion, order, subtotal);
+  const customerUseRef = database().ref(
+    `promotionCustomerUses/${promotion.id}/${uid}`,
+  );
+  const customerUse = await customerUseRef.transaction((current) => current || {
+    orderId,
+    usedAt: Date.now(),
+  });
+  if (!customerUse.committed) throw new Error("Could not reserve this discount code.");
+  if (customerUse.snapshot.val()?.orderId !== orderId &&
+      customerUse.snapshot.val()?.orderId != null) {
+    throw new Error("You have already used this discount code.");
+  }
+  const usageRef = database().ref(`promotions/${order.sellerId}/${promotion.id}/usageCount`);
+  const usage = await usageRef.transaction((current) => {
+    const count = Number(current || 0);
+    if (promotion.usageLimit != null && count >= Number(promotion.usageLimit)) return;
+    return count + 1;
+  });
+  if (!usage.committed) {
+    await customerUseRef.remove();
+    throw new Error("This discount code has reached its usage limit.");
+  }
+  const finalTotal = Math.max(0, Math.round((Number(order.total) - discountAmount) * 100) / 100);
+  try {
+    await database().ref(`orders/${orderId}`).update({
+      discountCode: normalizedCode,
+      discountPromotionId: promotion.id,
+      discountAmount,
+      finalTotal,
+      updatedAt: Date.now(),
+    });
+  } catch (error) {
+    await customerUseRef.remove();
+    await usageRef.transaction((current) => Math.max(0, Number(current || 0) - 1));
+    throw error;
+  }
+  return { discountAmount, finalTotal };
 }
 
 async function validateAndPriceOrder(orderId, uid) {
@@ -287,7 +409,27 @@ async function validateAndPriceOrder(orderId, uid) {
   if (fulfillment.type === "delivery" && !asMap(fulfillment.address)) {
     throw new Error("A delivery address is required.");
   }
-  return { order, lineItems, subtotal, deliveryFee, total };
+  let discountAmount = 0;
+  if (order.discountPromotionId) {
+    const promotion = asMap((await database()
+      .ref(`promotions/${order.sellerId}/${order.discountPromotionId}`).get()).val());
+    discountAmount = promotionDiscount(promotion, order, subtotal);
+    if (Number(order.discountAmount || 0) !== discountAmount) {
+      throw new Error("The applied discount is no longer valid.");
+    }
+  }
+  const finalTotal = Math.max(0, total - discountAmount);
+  if (amountInCentavos(finalTotal) <= 0) throw new Error("The order total must be positive.");
+  if (discountAmount > 0) {
+    let remainingDiscount = amountInCentavos(discountAmount);
+    for (const item of lineItems) {
+      const reduction = Math.min(remainingDiscount, item.amount - 1);
+      item.amount -= reduction;
+      remainingDiscount -= reduction;
+      if (remainingDiscount === 0) break;
+    }
+  }
+  return { order, lineItems, subtotal, deliveryFee, total: finalTotal };
 }
 
 async function createCheckout(request, response) {
@@ -317,6 +459,29 @@ async function createCheckout(request, response) {
         checkoutUrl: priced.order.paymongoCheckoutUrl,
       });
     }
+    const checkoutClaim = await claimCheckout(orderId);
+    if (!checkoutClaim.claimed) {
+      return jsonError(
+        response,
+        409,
+        "A checkout session is already being created for this order. Try again shortly.",
+      );
+    }
+    try {
+      const refreshed = await withTimeout(
+        database().ref(`orders/${orderId}`).get(),
+        CHECKOUT_OPERATION_TIMEOUT_MS,
+        "Realtime Database order refresh",
+      );
+      const currentOrder = asMap(refreshed.val());
+      if (currentOrder?.paymentStatus === "pending" &&
+          typeof currentOrder.paymongoCheckoutUrl === "string") {
+        return response.json({
+          orderId,
+          checkoutSessionId: currentOrder.paymongoCheckoutSessionId,
+          checkoutUrl: currentOrder.paymongoCheckoutUrl,
+        });
+      }
     const secret = process.env.PAYMONGO_SECRET_KEY;
     if (!secret) throw new Error("PAYMONGO_SECRET_KEY is not configured.");
     const returnBaseUrl = paymentReturnBaseUrl();
@@ -381,6 +546,9 @@ async function createCheckout(request, response) {
     console.log(`[CHECKOUT] Order updated (${elapsed(startedAt)})`);
     console.log(`[CHECKOUT] Checkout response sent (${elapsed(startedAt)})`);
     return response.json({ orderId, checkoutSessionId: data.id, checkoutUrl });
+    } finally {
+      await checkoutClaim.release();
+    }
   } catch (error) {
     console.warn(`[CHECKOUT] Failed after ${elapsed(startedAt)}: ${error.message}`);
     const status = error.message.includes("timed out") ||
@@ -427,17 +595,35 @@ async function paymongoWebhook(request, response) {
   const attributes = asMap(event?.attributes);
   if (!eventId || !event || !attributes) return jsonError(response, 400, "Invalid webhook payload.");
   const eventRef = database().ref(`paymentWebhookEvents/${eventId}`);
-  const claimed = await eventRef.transaction((current) => current || {
-    type: eventType,
-    receivedAt: Date.now(),
+  const claimed = await eventRef.transaction((current) => {
+    const now = Date.now();
+    if (current?.completed === true) return;
+    if (current?.processingAt && now - current.processingAt < 300000) return;
+    return { type: eventType, processingAt: now };
   });
-  if (!claimed.committed) return response.status(200).send("already processed");
+  if (!claimed.committed) {
+    const current = (await eventRef.get()).val();
+    if (current?.completed === true) {
+      return response.status(200).send("already processed");
+    }
+    return response.status(503).send("webhook is being processed");
+  }
+  const completeEvent = () => eventRef.update({
+    completed: true,
+    processedAt: Date.now(),
+  });
   const orderId = String(attributes.reference_number || attributes.metadata?.orderId || "");
-  if (!orderId) return response.status(200).send("ignored");
+  if (!orderId) {
+    await completeEvent();
+    return response.status(200).send("ignored");
+  }
   const orderSnapshot = await database().ref(`orders/${orderId}`).get();
-  const order = asMap(orderSnapshot.val());
+  const order = { ...asMap(orderSnapshot.val()), id: orderId };
   if (!order || order.paymongoCheckoutSessionId !== event.id ||
-    order.paymentMethod !== "paymongo") return response.status(200).send("ignored");
+    order.paymentMethod !== "paymongo") {
+    await completeEvent();
+    return response.status(200).send("ignored");
+  }
   const payment = Array.isArray(attributes.payments)
     ? attributes.payments.find((entry) => asMap(entry)?.attributes?.status === "paid")
     : null;
@@ -447,16 +633,35 @@ async function paymongoWebhook(request, response) {
     Number(paymentAttributes.amount) === Number(order.paymentAmount);
   const failed = ["checkout_session.payment.failed", "checkout_session.expired",
     "checkout_session.payment.cancelled"].includes(eventType);
-  if (order.paymentStatus === "paid") return response.status(200).send("already paid");
+  if (order.paymentStatus === "paid") {
+    await completeEvent();
+    return response.status(200).send("already paid");
+  }
   if (paid) {
     await database().ref(`orders/${orderId}`).update({
       paymentStatus: "paid",
       paymongoPaymentId: payment?.id || null,
       updatedAt: Date.now(),
     });
+    await writeCustomerNotification(
+      order,
+      "payment_paid",
+      "Payment confirmed",
+      `Payment for your order from ${order.storeName || "the store"} was confirmed.`,
+    );
   } else if (failed) {
-    await database().ref(`orders/${orderId}`).update({ paymentStatus: "failed", updatedAt: Date.now() });
+    await database().ref(`orders/${orderId}`).update({
+      paymentStatus: "failed",
+      updatedAt: Date.now(),
+    });
+    await writeCustomerNotification(
+      order,
+      "payment_failed",
+      "Payment failed",
+      `Payment for your order from ${order.storeName || "the store"} failed or expired.`,
+    );
   }
+  await completeEvent();
   return response.status(200).send("ok");
 }
 
@@ -466,6 +671,55 @@ app.get("/api/health", (request, response) => {
   response.status(200).json({ status: "ok", message: "Payments backend is running" });
 });
 app.post("/api/payments/checkout", express.json(), createCheckout);
+app.post("/api/payments/apply-discount", express.json(), async (request, response) => {
+  const decoded = await authenticate(request, response);
+  if (!decoded) return;
+  const body = asMap(request.body);
+  const orderId = typeof body?.orderId === "string" ? body.orderId.trim() : "";
+  const code = typeof body?.code === "string" ? body.code : "";
+  try {
+    const result = await applyDiscountToOrder(orderId, decoded.uid, code);
+    return response.json({ orderId, ...result });
+  } catch (error) {
+    return jsonError(response, 400, error.message);
+  }
+});
+
+app.post("/api/promotions/notify", express.json(), async (request, response) => {
+  const decoded = await authenticate(request, response);
+  if (!decoded) return;
+  try {
+    const body = asMap(request.body);
+    const promotionId = typeof body?.promotionId === "string"
+      ? body.promotionId.trim().toUpperCase() : "";
+    const code = typeof body?.code === "string"
+      ? body.code.trim().toUpperCase() : "";
+    const promotion = asMap((await database()
+      .ref(`promotions/${decoded.uid}/${promotionId}`).get()).val());
+    if (!promotion || promotion.code !== code) {
+      return jsonError(response, 404, "Promotion not found.");
+    }
+    const orders = asMap((await database().ref("orders")
+      .orderByChild("sellerId").equalTo(decoded.uid).get()).val()) || {};
+    const updates = {};
+    for (const order of Object.values(orders)) {
+      if (!order?.customerId) continue;
+      updates[`notifications/${order.customerId}/promotion_${promotionId}`] = {
+        type: "promotion",
+        sellerId: decoded.uid,
+        title: "New promotion",
+        body: `Use code ${promotionId} at ${order.storeName || "the store"}.`,
+        createdAt: Date.now(),
+        read: false,
+      };
+    }
+    if (Object.keys(updates).length > 0) await database().ref().update(updates);
+    return response.status(200).json({ notified: Object.keys(updates).length });
+  } catch (error) {
+    console.error("[PROMOTION] Notification fanout failed:", error);
+    return jsonError(response, 500, "Could not notify customers.");
+  }
+});
 app.post(
   "/api/payments/webhook",
   express.raw({ type: "application/json", limit: "1mb" }),

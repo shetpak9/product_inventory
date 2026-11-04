@@ -42,6 +42,9 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   late final TextEditingController _maxPerDayController = TextEditingController(
     text: widget.product?.maxPerDay?.toString() ?? '',
   );
+  late final TextEditingController _stockController = TextEditingController(
+    text: widget.product?.stockQuantity?.toString() ?? '0',
+  );
 
   late final String _productId = widget.product?.id ?? _db.newProductId();
   late String _category =
@@ -67,6 +70,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     _priceController.dispose();
     _descriptionController.dispose();
     _maxPerDayController.dispose();
+    _stockController.dispose();
     super.dispose();
   }
 
@@ -105,6 +109,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
           maxPerDay: _maxPerDayController.text.trim().isEmpty
               ? null
               : int.parse(_maxPerDayController.text.trim()),
+          stockQuantity: int.parse(_stockController.text.trim()),
           optionGroups: _optionGroups,
         ),
       );
@@ -240,6 +245,22 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                     final int? limit = int.tryParse(value!.trim());
                     if (limit == null || limit < 1 || limit > 10000) {
                       return 'Enter a whole number from 1 to 10,000';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _stockController,
+                  decoration: textInputDecoration.copyWith(
+                    hintText: 'Stock quantity',
+                    helperText: 'Set to 0 to mark the product out of stock.',
+                  ),
+                  keyboardType: TextInputType.number,
+                  validator: (String? value) {
+                    final int? stock = int.tryParse((value ?? '').trim());
+                    if (stock == null || stock < 0 || stock > 1000000) {
+                      return 'Enter a whole number from 0 to 1,000,000';
                     }
                     return null;
                   },

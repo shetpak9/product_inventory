@@ -7,6 +7,7 @@ import 'package:product_inventory/model/store.dart';
 import 'package:product_inventory/model/user.dart';
 import 'package:product_inventory/screen/account/profile_screen.dart';
 import 'package:product_inventory/screen/seller/product_form.dart';
+import 'package:product_inventory/screen/seller/promotions.dart';
 import 'package:product_inventory/screen/seller/seller_dashboard.dart';
 import 'package:product_inventory/screen/seller/seller_orders.dart';
 import 'package:product_inventory/screen/seller/store_setup.dart';
@@ -218,36 +219,57 @@ class _SellerHomeState extends State<SellerHome> {
                       ),
                     ],
                   ),
-                  floatingActionButton: _selectedTab == 0
+                  floatingActionButton: _selectedTab == 3
+                      ? FloatingActionButton.extended(
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => PromotionFormScreen(
+                                sellerId: widget.profile.uid,
+                              ),
+                            ),
+                          ),
+                          icon: const Icon(Icons.add),
+                          label: const Text('Add promotion'),
+                        )
+                      : _selectedTab == 0
                       ? FloatingActionButton.extended(
                           onPressed: () => _openProductForm(store),
                           icon: const Icon(Icons.add),
                           label: const Text('Add product'),
                         )
                       : null,
-                  body: IndexedStack(
-                    index: _selectedTab,
-                    children: <Widget>[
-                      _buildProducts(store),
-                      SellerOrdersTab(
-                        orders: ordersSnapshot.data,
-                        loading:
-                            ordersSnapshot.connectionState ==
-                                ConnectionState.waiting &&
-                            !ordersSnapshot.hasData &&
-                            !ordersSnapshot.hasError,
-                        error: ordersSnapshot.error,
-                      ),
-                      SellerDashboardTab(
-                        orders: ordersSnapshot.data,
-                        loading:
-                            ordersSnapshot.connectionState ==
-                                ConnectionState.waiting &&
-                            !ordersSnapshot.hasData &&
-                            !ordersSnapshot.hasError,
-                        error: ordersSnapshot.error,
-                      ),
-                    ],
+                  body: StreamBuilder<List<Product>>(
+                    stream: _productsStream,
+                    builder:
+                        (
+                          BuildContext context,
+                          AsyncSnapshot<List<Product>> productSnapshot,
+                        ) => IndexedStack(
+                          index: _selectedTab,
+                          children: <Widget>[
+                            _buildProducts(store),
+                            SellerOrdersTab(
+                              orders: ordersSnapshot.data,
+                              loading:
+                                  ordersSnapshot.connectionState ==
+                                      ConnectionState.waiting &&
+                                  !ordersSnapshot.hasData &&
+                                  !ordersSnapshot.hasError,
+                              error: ordersSnapshot.error,
+                            ),
+                            SellerDashboardTab(
+                              orders: ordersSnapshot.data,
+                              products: productSnapshot.data,
+                              loading:
+                                  ordersSnapshot.connectionState ==
+                                      ConnectionState.waiting &&
+                                  !ordersSnapshot.hasData &&
+                                  !ordersSnapshot.hasError,
+                              error: ordersSnapshot.error,
+                            ),
+                            SellerPromotionsTab(sellerId: widget.profile.uid),
+                          ],
+                        ),
                   ),
                   bottomNavigationBar: ListenableBuilder(
                     listenable: OrderNotifier.instance,
@@ -285,6 +307,11 @@ class _SellerHomeState extends State<SellerHome> {
                               icon: Icon(Icons.dashboard_outlined),
                               selectedIcon: Icon(Icons.dashboard),
                               label: 'Dashboard',
+                            ),
+                            const NavigationDestination(
+                              icon: Icon(Icons.local_offer_outlined),
+                              selectedIcon: Icon(Icons.local_offer),
+                              label: 'Promos',
                             ),
                           ],
                         ),
@@ -331,6 +358,12 @@ class _SellerHomeState extends State<SellerHome> {
             final List<String> details = <String>[
               '₱${product.price.toStringAsFixed(2)}',
               if (product.category.isNotEmpty) product.category,
+              if (product.stockQuantity != null)
+                product.stockQuantity == 0
+                    ? 'Out of stock'
+                    : product.stockQuantity! <= 5
+                    ? 'Low stock (${product.stockQuantity})'
+                    : '${product.stockQuantity} in stock',
               if (!product.isAvailable) 'Hidden',
             ];
 

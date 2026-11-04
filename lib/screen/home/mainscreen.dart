@@ -6,6 +6,7 @@ import 'package:product_inventory/screen/home/cart.dart';
 import 'package:product_inventory/screen/home/favorites_screen.dart';
 import 'package:product_inventory/screen/home/home_screen.dart';
 import 'package:product_inventory/screen/home/my_orders.dart';
+import 'package:product_inventory/screen/home/notifications.dart';
 import 'package:product_inventory/screen/home/payment_waiting.dart';
 import 'package:product_inventory/screen/home/shop.dart';
 import 'package:product_inventory/screen/account/profile_screen.dart';
@@ -91,6 +92,7 @@ class _MainScreenState extends State<MainScreen> {
       );
       return;
     }
+    if (PaymentWaitingScreen.isActiveFor(link.orderId)) return;
     navigator.push(
       MaterialPageRoute<void>(
         builder: (_) => PaymentWaitingScreen(orderId: link.orderId),
@@ -193,6 +195,13 @@ class _MainScreenState extends State<MainScreen> {
                 tooltip: 'Account',
                 onSelected: (String value) {
                   if (value == 'orders') _openOrders();
+                  if (value == 'notifications') {
+                    _navigatorKeys[_currentIndex].currentState?.push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const NotificationsScreen(),
+                      ),
+                    );
+                  }
                   if (value == 'profile') _openProfile();
                   if (value == 'logout') _signOut();
                 },
@@ -205,6 +214,16 @@ class _MainScreenState extends State<MainScreen> {
                         const Expanded(child: Text('My orders')),
                         if (hasUnseen)
                           const _UnseenDot(tooltip: 'New order updates'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem<String>(
+                    value: 'notifications',
+                    child: Row(
+                      children: <Widget>[
+                        const Expanded(child: Text('Notifications')),
+                        if (hasUnseen)
+                          const _UnseenDot(tooltip: 'Unread notifications'),
                       ],
                     ),
                   ),

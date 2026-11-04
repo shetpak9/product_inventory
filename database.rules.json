@@ -162,6 +162,10 @@
         "maxPerDay": {
           ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 1 && newData.val() <= 10000"
         },
+        "stockQuantity": {
+          ".write": "auth != null && ((root.child('users').child(auth.uid).child('role').val() === 'seller' && data.parent().child('sellerId').val() === auth.uid) || (data.exists() && newData.isNumber() && newData.val() <= data.val() + 99 && newData.val() >= data.val() - 99))",
+          ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0 && newData.val() <= 1000000"
+        },
         "optionGroups": {
           "$groupIndex": {
             ".validate": "newData.hasChildren(['name', 'type', 'required']) && newData.child('name').isString() && newData.child('name').val().length > 0 && newData.child('name').val().length <= 50 && (newData.child('type').val() === 'singleChoice' || newData.child('type').val() === 'freeText' || newData.child('type').val() === 'tags') && newData.child('required').isBoolean() && (newData.child('type').val() === 'freeText' || newData.child('choices').hasChildren())",
@@ -225,6 +229,50 @@
         }
       }
     },
+    "promotions": {
+      "$sellerId": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.uid === $sellerId && root.child('users').child(auth.uid).child('role').val() === 'seller'",
+        "$code": {
+          ".validate": "newData.hasChildren(['sellerId', 'code', 'type', 'value', 'startsAt', 'endsAt', 'minOrderAmount', 'usageCount']) && newData.child('sellerId').val() === $sellerId && newData.child('code').val() === $code && (newData.child('type').val() === 'percentage' || newData.child('type').val() === 'fixed') && newData.child('value').isNumber() && newData.child('value').val() > 0 && newData.child('value').val() <= 1000000 && newData.child('startsAt').isNumber() && newData.child('endsAt').isNumber() && newData.child('endsAt').val() > newData.child('startsAt').val() && newData.child('minOrderAmount').isNumber() && newData.child('minOrderAmount').val() >= 0 && newData.child('usageCount').isNumber() && newData.child('usageCount').val() >= 0 && (!newData.child('usageLimit').exists() || (newData.child('usageLimit').isNumber() && newData.child('usageLimit').val() > 0))",
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    },
+    "promotionCustomerUses": {
+      "$promotionId": {
+        "$uid": {
+          ".read": "auth != null && auth.uid === $uid",
+          ".write": false
+        }
+      }
+    },
+    "notifications": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$notificationId": {
+          ".write": "auth != null && ((auth.uid === $uid && data.exists()) || (newData.child('type').val() === 'promotion' && newData.child('sellerId').val() === auth.uid && root.child('users').child(auth.uid).child('role').val() === 'seller') || (root.child('orders').child(newData.child('orderId').val()).child('customerId').val() === $uid && (auth.uid === $uid || root.child('orders').child(newData.child('orderId').val()).child('sellerId').val() === auth.uid)))",
+          ".validate": "newData.hasChildren(['type', 'title', 'body', 'createdAt', 'read']) && newData.child('type').isString() && newData.child('type').val().length <= 40 && newData.child('title').isString() && newData.child('title').val().length > 0 && newData.child('title').val().length <= 80 && newData.child('body').isString() && newData.child('body').val().length <= 300 && newData.child('createdAt').isNumber() && newData.child('read').isBoolean() && (!newData.child('orderId').exists() || newData.child('orderId').isString()) && (!newData.child('sellerId').exists() || newData.child('sellerId').isString()) && (data.exists() ? (newData.child('type').val() === data.child('type').val() && newData.child('title').val() === data.child('title').val() && newData.child('body').val() === data.child('body').val() && newData.child('createdAt').val() === data.child('createdAt').val()) : true)",
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    },
+    "reviews": {
+      ".read": "auth != null",
+      "$productId": {
+        "$orderId": {
+          ".write": "auth != null && ((!data.exists() && newData.exists() && root.child('orders').child($orderId).child('customerId').val() === auth.uid && root.child('orders').child($orderId).child('status').val() === 'delivered' && root.child('orders').child($orderId).child('reviewableProductIds').child($productId).val() === true) || (data.exists() && data.child('customerId').val() === auth.uid && root.child('orders').child($orderId).child('status').val() === 'delivered'))",
+          ".validate": "newData.hasChildren(['productId', 'orderId', 'customerId', 'customerName', 'rating', 'comment', 'createdAt', 'updatedAt']) && newData.child('productId').val() === $productId && newData.child('orderId').val() === $orderId && newData.child('customerId').val() === auth.uid && newData.child('customerName').isString() && newData.child('customerName').val().length > 0 && newData.child('customerName').val().length <= 100 && newData.child('rating').isNumber() && newData.child('rating').val() % 1 === 0 && newData.child('rating').val() >= 1 && newData.child('rating').val() <= 5 && newData.child('comment').isString() && newData.child('comment').val().length <= 500 && newData.child('createdAt').isNumber() && newData.child('updatedAt').isNumber() && (!data.exists() || (newData.child('productId').val() === data.child('productId').val() && newData.child('orderId').val() === data.child('orderId').val() && newData.child('customerId').val() === data.child('customerId').val() && newData.child('createdAt').val() === data.child('createdAt').val()))",
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    },
     "orders": {
       ".indexOn": [
         "customerId",
@@ -233,7 +281,7 @@
       ".read": "auth != null && ((query.orderByChild == 'customerId' && query.equalTo == auth.uid) || (query.orderByChild == 'sellerId' && query.equalTo == auth.uid))",
       "$orderId": {
         ".read": "auth != null && (data.child('customerId').val() === auth.uid || data.child('sellerId').val() === auth.uid)",
-        ".write": "auth != null && !data.exists() && newData.exists() && newData.child('customerId').val() === auth.uid && newData.child('status').val() === 'pending' && root.child('stores').child(newData.child('sellerId').val()).exists()",
+        ".write": "auth != null && ((!data.exists() && newData.exists() && newData.child('customerId').val() === auth.uid && newData.child('status').val() === 'pending' && root.child('stores').child(newData.child('sellerId').val()).exists()) || (data.exists() && data.child('customerId').val() === auth.uid && data.child('status').val() === 'pending' && newData.child('status').val() === 'cancelled'))",
         ".validate": "newData.hasChildren(['customerId', 'sellerId', 'status', 'items', 'subtotal', 'total', 'createdAt']) && ((!data.exists() && newData.hasChildren(['fulfillment', 'deliveryFee', 'customerPhone']) && newData.child('customerPhone').isString() && newData.child('customerPhone').val().length > 0 && newData.child('customerPhone').val().length <= 30 && newData.child('total').val() === newData.child('subtotal').val() + newData.child('deliveryFee').val()) || (data.exists() && ((!data.child('fulfillment').exists() && !newData.child('fulfillment').exists() && !data.child('deliveryFee').exists() && !newData.child('deliveryFee').exists()) || (newData.hasChildren(['fulfillment', 'deliveryFee']) && newData.child('total').val() === newData.child('subtotal').val() + newData.child('deliveryFee').val()))))",
         "customerId": {
           ".validate": "newData.isString() && (data.exists() ? newData.val() === data.val() : newData.val() === auth.uid)"
@@ -289,6 +337,22 @@
         },
         "total": {
           ".validate": "newData.isNumber() && newData.val() >= 0 && (!data.exists() || newData.val() === data.val())"
+        },
+        "discountCode": {
+          ".write": false,
+          ".validate": "newData.isString() && newData.val().length >= 3 && newData.val().length <= 30"
+        },
+        "discountAmount": {
+          ".write": false,
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= newData.parent().child('subtotal').val()"
+        },
+        "discountPromotionId": {
+          ".write": false,
+          ".validate": "newData.isString() && newData.val().length >= 3 && newData.val().length <= 30"
+        },
+        "finalTotal": {
+          ".write": false,
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= newData.parent().child('total').val()"
         },
         "deliveryFee": {
           ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && (data.exists() ? newData.val() === data.val() : ((newData.parent().child('fulfillment').child('type').val() === 'delivery' && (newData.val() === root.child('stores').child(newData.parent().child('sellerId').val()).child('fulfillment').child('deliveryFee').val() || (!root.child('stores').child(newData.parent().child('sellerId').val()).child('fulfillment').exists() && newData.val() === root.child('stores').child(newData.parent().child('sellerId').val()).child('deliveryFee').val()))) || (newData.parent().child('fulfillment').child('type').val() === 'pickup' && newData.val() === 0)))"
@@ -347,6 +411,15 @@
         "status": {
           ".write": "auth != null && newData.exists() && ((data.parent().child('sellerId').val() === auth.uid && root.child('users').child(auth.uid).child('role').val() === 'seller' && ((data.val() === 'pending' && (newData.val() === 'accepted' || newData.val() === 'cancelled')) || (data.val() === 'accepted' && (newData.val() === 'baking' || newData.val() === 'cancelled')) || (data.val() === 'baking' && newData.val() === 'ready') || (data.val() === 'ready' && ((data.parent().child('fulfillment').child('type').val() !== 'delivery' && newData.val() === 'delivered') || (data.parent().child('fulfillment').child('type').val() === 'delivery' && (newData.val() === 'out_for_delivery' || newData.val() === 'delivered')))) || (data.val() === 'out_for_delivery' && newData.val() === 'delivered'))) || (data.parent().child('customerId').val() === auth.uid && data.val() === 'pending' && newData.val() === 'cancelled'))",
           ".validate": "newData.val() === 'pending' || newData.val() === 'accepted' || newData.val() === 'baking' || newData.val() === 'ready' || newData.val() === 'out_for_delivery' || newData.val() === 'delivered' || newData.val() === 'cancelled'"
+        },
+        "stockDeducted": {
+          ".write": "auth != null && ((!data.exists() && newData.val() === true && newData.parent().child('customerId').val() === auth.uid) || (data.val() === true && newData.val() === false && newData.parent().child('status').val() === 'cancelled' && (newData.parent().child('customerId').val() === auth.uid || newData.parent().child('sellerId').val() === auth.uid)))",
+          ".validate": "newData.isBoolean() && (!data.exists() || newData.val() === data.val() || (data.val() === true && newData.val() === false && newData.parent().child('status').val() === 'cancelled'))"
+        },
+        "reviewableProductIds": {
+          "$productId": {
+            ".validate": "newData.val() === true && (!data.exists() || newData.val() === data.val())"
+          }
         },
         "paymentMethod": {
           ".validate": "newData.isString() && (newData.val() === 'cash' || newData.val() === 'paymongo') && (!data.exists() || newData.val() === data.val())"

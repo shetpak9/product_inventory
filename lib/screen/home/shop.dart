@@ -27,6 +27,10 @@ class _ShopState extends State<Shop> {
   late final Stream<List<Store>> _stores = DatabaseService().storesStream;
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
+  String? _categoryFilter;
+  String? _sellerFilter;
+  _AvailabilityFilter _availabilityFilter = _AvailabilityFilter.all;
+  _PriceSort _priceSort = _PriceSort.none;
 
   @override
   void dispose() {
@@ -89,38 +93,40 @@ class _ShopState extends State<Shop> {
         Expanded(
           child: StreamBuilder<List<Product>>(
             stream: _products,
-            builder: (
-              BuildContext context,
-              AsyncSnapshot<List<Product>> productsSnapshot,
-            ) {
-              if (productsSnapshot.hasError) {
-                return Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      'Unable to load the shop: ${productsSnapshot.error}',
-                    ),
-                  ),
-                );
-              }
-              if (!productsSnapshot.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              return StreamBuilder<List<Store>>(
-                stream: _stores,
-                builder: (
+            builder:
+                (
                   BuildContext context,
-                  AsyncSnapshot<List<Store>> storesSnapshot,
+                  AsyncSnapshot<List<Product>> productsSnapshot,
                 ) {
-                  // If stores fail to load the shop still works without them.
-                  return _buildContent(
-                    productsSnapshot.data!,
-                    storesSnapshot.data ?? <Store>[],
+                  if (productsSnapshot.hasError) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          'Unable to load the shop: ${productsSnapshot.error}',
+                        ),
+                      ),
+                    );
+                  }
+                  if (!productsSnapshot.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  return StreamBuilder<List<Store>>(
+                    stream: _stores,
+                    builder:
+                        (
+                          BuildContext context,
+                          AsyncSnapshot<List<Store>> storesSnapshot,
+                        ) {
+                          // If stores fail to load the shop still works without them.
+                          return _buildContent(
+                            productsSnapshot.data!,
+                            storesSnapshot.data ?? <Store>[],
+                          );
+                        },
                   );
                 },
-              );
-            },
           ),
         ),
       ],
@@ -129,18 +135,73 @@ class _ShopState extends State<Shop> {
 
   Widget _buildContent(List<Product> products, List<Store> stores) {
     final String query = _query.trim().toLowerCase();
+    final List<String> categories = _categoriesFrom(products);
+    final List<Product> filteredProducts = products.where((Product product) {
+      final bool matchesQuery =
+          query.isEmpty ||
+          product.name.toLowerCase().contains(query) ||
+          product.category.toLowerCase().contains(query) ||
+          product.storeName.toLowerCase().contains(query);
+      final bool matchesCategory =
+          _categoryFilter == null ||
+          product.category.trim().toLowerCase() ==
+              _categoryFilter!.toLowerCase();
+      final bool matchesSeller =
+          _sellerFilter == null || product.sellerId == _sellerFilter;
+      final bool outOfStock =
+          product.stockQuantity != null && product.stockQuantity == 0;
+      final bool matchesAvailability =
+          _availabilityFilter == _AvailabilityFilter.all ||
+          (_availabilityFilter == _AvailabilityFilter.available &&
+              !outOfStock) ||
+          (_availabilityFilter == _AvailabilityFilter.outOfStock && outOfStock);
+      return matchesQuery &&
+          matchesCategory &&
+          matchesSeller &&
+          matchesAvailability;
+    }).toList();
+    if (_priceSort != _PriceSort.none) {
+      filteredProducts.sort(
+        (Product a, Product b) => _priceSort == _PriceSort.lowToHigh
+            ? a.price.compareTo(b.price)
+            : b.price.compareTo(a.price),
+      );
+    }
     final List<Widget> slivers = <Widget>[];
+    slivers.add(
+      SliverToBoxAdapter(
+        child: _FilterBar(
+          category: _categoryFilter,
+          categories: categories,
+          sellerId: _sellerFilter,
+          stores: stores,
+          availability: _availabilityFilter,
+          priceSort: _priceSort,
+          onCategoryChanged: (String? value) =>
+              setState(() => _categoryFilter = value),
+          onSellerChanged: (String? value) =>
+              setState(() => _sellerFilter = value),
+          onAvailabilityChanged: (_AvailabilityFilter value) =>
+              setState(() => _availabilityFilter = value),
+          onPriceSortChanged: (_PriceSort value) =>
+              setState(() => _priceSort = value),
+          onClear: _clearFilters,
+          hasFilters: _hasFilters,
+        ),
+      ),
+    );
 
-    if (query.isEmpty) {
+    if (query.isEmpty && !_hasFilters) {
       if (stores.isNotEmpty) {
         slivers
           ..add(const SliverToBoxAdapter(child: _SectionTitle('Stores')))
           ..add(SliverToBoxAdapter(child: _StoreStrip(stores: stores)));
       }
 
-      final List<String> categories = _categoriesFrom(products);
       slivers
-        ..add(const SliverToBoxAdapter(child: _SectionTitle('Shop by Categories')))
+        ..add(
+          const SliverToBoxAdapter(child: _SectionTitle('Shop by Categories')),
+        )
         ..add(
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
@@ -151,45 +212,46 @@ class _ShopState extends State<Shop> {
                 mainAxisSpacing: 14,
                 childAspectRatio: 0.94,
               ),
-              delegate: SliverChildBuilderDelegate(
-                (BuildContext context, int index) {
-                  final String category = categories[index];
-                  return _CategoryCard(
-                    category: category,
-                    imageUrl: _imageFor(products, category),
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              CategoryProductsScreen(category: category),
-                        ),
-                      );
-                    },
-                  );
-                },
-                childCount: categories.length,
-              ),
+              delegate: SliverChildBuilderDelegate((
+                BuildContext context,
+                int index,
+              ) {
+                final String category = categories[index];
+                return _CategoryCard(
+                  category: category,
+                  imageUrl: _imageFor(products, category),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            CategoryProductsScreen(category: category),
+                      ),
+                    );
+                  },
+                );
+              }, childCount: categories.length),
             ),
           ),
         );
     } else {
-      final List<Store> matchingStores = stores
-          .where((Store s) => s.name.toLowerCase().contains(query))
-          .toList();
-      final List<Product> matchingProducts = products
-          .where(
-            (Product p) =>
-                p.name.toLowerCase().contains(query) ||
-                p.category.toLowerCase().contains(query) ||
-                p.storeName.toLowerCase().contains(query),
-          )
-          .toList();
+      final List<Store> matchingStores = query.isEmpty
+          ? <Store>[]
+          : stores
+                .where((Store s) => s.name.toLowerCase().contains(query))
+                .toList();
+      final List<Product> matchingProducts = filteredProducts;
 
       if (matchingStores.isEmpty && matchingProducts.isEmpty) {
         slivers.add(
           SliverFillRemaining(
             hasScrollBody: false,
-            child: Center(child: Text('No results for "$_query".')),
+            child: Center(
+              child: Text(
+                query.isEmpty
+                    ? 'No products match these filters.'
+                    : 'No results for "$_query".',
+              ),
+            ),
           ),
         );
       } else {
@@ -227,6 +289,142 @@ class _ShopState extends State<Shop> {
     }
 
     return CustomScrollView(slivers: slivers);
+  }
+
+  bool get _hasFilters =>
+      _categoryFilter != null ||
+      _sellerFilter != null ||
+      _availabilityFilter != _AvailabilityFilter.all ||
+      _priceSort != _PriceSort.none;
+
+  void _clearFilters() {
+    setState(() {
+      _categoryFilter = null;
+      _sellerFilter = null;
+      _availabilityFilter = _AvailabilityFilter.all;
+      _priceSort = _PriceSort.none;
+    });
+  }
+}
+
+enum _AvailabilityFilter { all, available, outOfStock }
+
+enum _PriceSort { none, lowToHigh, highToLow }
+
+class _FilterBar extends StatelessWidget {
+  const _FilterBar({
+    required this.category,
+    required this.categories,
+    required this.sellerId,
+    required this.stores,
+    required this.availability,
+    required this.priceSort,
+    required this.onCategoryChanged,
+    required this.onSellerChanged,
+    required this.onAvailabilityChanged,
+    required this.onPriceSortChanged,
+    required this.onClear,
+    required this.hasFilters,
+  });
+
+  final String? category;
+  final List<String> categories;
+  final String? sellerId;
+  final List<Store> stores;
+  final _AvailabilityFilter availability;
+  final _PriceSort priceSort;
+  final ValueChanged<String?> onCategoryChanged;
+  final ValueChanged<String?> onSellerChanged;
+  final ValueChanged<_AvailabilityFilter> onAvailabilityChanged;
+  final ValueChanged<_PriceSort> onPriceSortChanged;
+  final VoidCallback onClear;
+  final bool hasFilters;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<Store> availableStores = stores;
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      child: Row(
+        children: <Widget>[
+          DropdownButton<String?>(
+            value: category,
+            hint: const Text('Category'),
+            items: <DropdownMenuItem<String?>>[
+              const DropdownMenuItem<String?>(
+                value: null,
+                child: Text('All categories'),
+              ),
+              ...categories.map(
+                (String value) =>
+                    DropdownMenuItem<String?>(value: value, child: Text(value)),
+              ),
+            ],
+            onChanged: onCategoryChanged,
+          ),
+          const SizedBox(width: 12),
+          DropdownButton<String?>(
+            value: sellerId,
+            hint: const Text('Seller'),
+            items: <DropdownMenuItem<String?>>[
+              const DropdownMenuItem<String?>(
+                value: null,
+                child: Text('All sellers'),
+              ),
+              ...availableStores.map(
+                (Store store) => DropdownMenuItem<String?>(
+                  value: store.ownerId,
+                  child: Text(store.name),
+                ),
+              ),
+            ],
+            onChanged: onSellerChanged,
+          ),
+          const SizedBox(width: 12),
+          DropdownButton<_AvailabilityFilter>(
+            value: availability,
+            items: const <DropdownMenuItem<_AvailabilityFilter>>[
+              DropdownMenuItem(
+                value: _AvailabilityFilter.all,
+                child: Text('All stock'),
+              ),
+              DropdownMenuItem(
+                value: _AvailabilityFilter.available,
+                child: Text('In stock'),
+              ),
+              DropdownMenuItem(
+                value: _AvailabilityFilter.outOfStock,
+                child: Text('Out of stock'),
+              ),
+            ],
+            onChanged: (value) {
+              if (value != null) onAvailabilityChanged(value);
+            },
+          ),
+          const SizedBox(width: 12),
+          DropdownButton<_PriceSort>(
+            value: priceSort,
+            items: const <DropdownMenuItem<_PriceSort>>[
+              DropdownMenuItem(value: _PriceSort.none, child: Text('Sort by')),
+              DropdownMenuItem(
+                value: _PriceSort.lowToHigh,
+                child: Text('Price: low to high'),
+              ),
+              DropdownMenuItem(
+                value: _PriceSort.highToLow,
+                child: Text('Price: high to low'),
+              ),
+            ],
+            onChanged: (value) {
+              if (value != null) onPriceSortChanged(value);
+            },
+          ),
+          if (hasFilters)
+            TextButton(onPressed: onClear, child: const Text('Clear')),
+        ],
+      ),
+    );
   }
 }
 
@@ -293,7 +491,10 @@ class _StoreStrip extends StatelessWidget {
                   if (!store.isOpen)
                     Text(
                       'Closed',
-                      style: TextStyle(fontSize: 11, color: Colors.red.shade700),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.red.shade700,
+                      ),
                     ),
                 ],
               ),

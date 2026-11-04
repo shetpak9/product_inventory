@@ -1,10 +1,14 @@
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:product_inventory/model/address.dart';
 import 'package:product_inventory/model/cart.dart';
 import 'package:product_inventory/model/order.dart';
+import 'package:product_inventory/model/notification.dart';
 import 'package:product_inventory/model/product.dart';
+import 'package:product_inventory/model/review.dart';
+import 'package:product_inventory/model/promotion.dart';
 import 'package:product_inventory/model/store.dart';
 import 'package:product_inventory/model/user.dart';
 
@@ -375,6 +379,92 @@ class DatabaseService {
     });
   }
 
+  Stream<List<ProductReview>> reviewsStream(String productId) {
+    return _db.child('reviews').child(productId).onValue.map((
+      DatabaseEvent event,
+    ) {
+      final Object? raw = event.snapshot.value;
+      if (raw is! Map) return <ProductReview>[];
+      final List<ProductReview> reviews = raw.entries
+          .where((MapEntry<dynamic, dynamic> entry) => entry.value is Map)
+          .map(
+            (MapEntry<dynamic, dynamic> entry) =>
+                ProductReview.fromMap(entry.value as Map, entry.key.toString()),
+          )
+          .toList();
+      reviews.sort(
+        (ProductReview a, ProductReview b) =>
+            (b.createdAt ?? 0).compareTo(a.createdAt ?? 0),
+      );
+      return reviews;
+    });
+  }
+
+  Future<void> saveReview(ProductReview review) async {
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid != review.customerId) {
+      throw StateError('A signed-in customer is required to save a review.');
+    }
+    final DatabaseReference reviewRef = _db
+        .child('reviews')
+        .child(review.productId)
+        .child(review.orderId);
+    final DataSnapshot existing = await reviewRef.get();
+    await reviewRef.set(<String, Object?>{
+      ...review.toMap(includeCreatedAt: existing.exists),
+      if (!existing.exists) 'createdAt': ServerValue.timestamp,
+      'updatedAt': ServerValue.timestamp,
+    });
+  }
+
+  Future<void> deleteReview(ProductReview review) async {
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid != review.customerId) {
+      throw StateError('You can only delete your own review.');
+    }
+
+    await _db
+        .child('reviews')
+        .child(review.productId)
+        .child(review.orderId)
+        .remove();
+  }
+
+  Stream<List<Promotion>> promotionsStream(String sellerId) {
+    return _db.child('promotions').child(sellerId).onValue.map((
+      DatabaseEvent event,
+    ) {
+      final Object? raw = event.snapshot.value;
+      if (raw is! Map) return <Promotion>[];
+      return raw.entries
+          .where((MapEntry<dynamic, dynamic> entry) => entry.value is Map)
+          .map(
+            (MapEntry<dynamic, dynamic> entry) =>
+                Promotion.fromMap(entry.value as Map, entry.key.toString()),
+          )
+          .toList();
+    });
+  }
+
+  Future<void> savePromotion(Promotion promotion) {
+    return _db
+        .child('promotions')
+        .child(promotion.sellerId)
+        .child(promotion.id)
+        .set(<String, Object?>{
+          ...promotion.toMap(),
+          'updatedAt': ServerValue.timestamp,
+        });
+  }
+
+  Future<void> deletePromotion(Promotion promotion) {
+    return _db
+        .child('promotions')
+        .child(promotion.sellerId)
+        .child(promotion.id)
+        .remove();
+  }
+
   Future<Product?> getProductOnce(String productId) async {
     final DataSnapshot snapshot = await productRef.child(productId).get();
     final Object? raw = snapshot.value;
@@ -479,6 +569,7 @@ class DatabaseService {
 
     final List<_ProductCountReservation> reservations =
         <_ProductCountReservation>[];
+    final List<_StockReservation> stockReservations = <_StockReservation>[];
     try {
       final Map<String, _ProductCountReservation> requestedCounts =
           <String, _ProductCountReservation>{};
@@ -511,10 +602,22 @@ class DatabaseService {
           enforceLimit: true,
         );
         reservations.add(reservation);
+        if (product.stockQuantity != null) {
+          final _StockReservation stockReservation = _StockReservation(
+            productId: product.id,
+            quantity: reservation.quantity,
+            productName: product.name,
+          );
+          await _adjustStock(stockReservation, -stockReservation.quantity);
+          stockReservations.add(stockReservation);
+        }
       }
 
       final Map<String, Object?> updates = <String, Object?>{};
       final List<String> orderIds = <String>[];
+      final Set<String> stockProductIds = stockReservations
+          .map((_StockReservation reservation) => reservation.productId)
+          .toSet();
       for (final Order order in orders) {
         final String? orderId = _db.child('orders').push().key;
         if (orderId == null) {
@@ -523,6 +626,12 @@ class DatabaseService {
         orderIds.add(orderId);
         updates['orders/$orderId'] = <String, Object?>{
           ...order.toMap(),
+          'reviewableProductIds': <String, bool>{
+            for (final OrderItem item in order.items) item.productId: true,
+          },
+          'stockDeducted': order.items.any(
+            (OrderItem item) => stockProductIds.contains(item.productId),
+          ),
           'createdAt': ServerValue.timestamp,
           'updatedAt': ServerValue.timestamp,
         };
@@ -551,6 +660,16 @@ class DatabaseService {
           debugPrint(
             'Could not roll back product count reservation '
             'for ${reservation.productId}/${reservation.date}: $rollbackError',
+          );
+        }
+      }
+      for (final _StockReservation reservation in stockReservations.reversed) {
+        try {
+          await _adjustStock(reservation, reservation.quantity);
+        } catch (rollbackError) {
+          debugPrint(
+            'Could not roll back stock reservation for '
+            '${reservation.productId}: $rollbackError',
           );
         }
       }
@@ -585,9 +704,61 @@ class DatabaseService {
     });
   }
 
+  Stream<List<AppNotification>> notificationsStream(String uid) {
+    return _db.child('notifications').child(uid).onValue.map((
+      DatabaseEvent event,
+    ) {
+      final Object? raw = event.snapshot.value;
+      if (raw is! Map) return <AppNotification>[];
+      final List<AppNotification> notifications = raw.entries
+          .where((MapEntry<dynamic, dynamic> entry) => entry.value is Map)
+          .map(
+            (MapEntry<dynamic, dynamic> entry) => AppNotification.fromMap(
+              entry.value as Map,
+              entry.key.toString(),
+            ),
+          )
+          .toList();
+      notifications.sort(
+        (AppNotification a, AppNotification b) =>
+            (b.createdAt ?? 0).compareTo(a.createdAt ?? 0),
+      );
+      return notifications;
+    });
+  }
+
+  Future<void> markNotificationRead(String uid, String notificationId) {
+    return _db.child('notifications').child(uid).child(notificationId).update(
+      <String, Object?>{'read': true},
+    );
+  }
+
+  Future<void> markAllNotificationsRead(String uid) async {
+    final DataSnapshot snapshot = await _db
+        .child('notifications')
+        .child(uid)
+        .get();
+    final Object? raw = snapshot.value;
+    if (raw is! Map) return;
+    final Map<String, Object?> updates = <String, Object?>{};
+    for (final dynamic key in raw.keys) {
+      updates['notifications/$uid/$key/read'] = true;
+    }
+    if (updates.isNotEmpty) await _db.update(updates);
+  }
+
+  Future<Order?> getOrder(String orderId) async {
+    final DataSnapshot snapshot = await _db
+        .child('orders')
+        .child(orderId)
+        .get();
+    final Object? raw = snapshot.value;
+    return raw is Map ? Order.fromMap(raw, orderId) : null;
+  }
+
   Future<void> updateOrderStatus(String orderId, OrderStatus status) async {
     Order? order;
-    if (status == OrderStatus.cancelled) {
+    {
       final DataSnapshot snapshot = await _db
           .child('orders')
           .child(orderId)
@@ -597,11 +768,58 @@ class DatabaseService {
         order = Order.fromMap(raw, orderId);
       }
     }
-    await _db.child('orders').child(orderId).update(<String, Object?>{
-      'status': status.dbValue,
-      'updatedAt': ServerValue.timestamp,
-    });
+    final Map<String, Object?> updates = <String, Object?>{
+      'orders/$orderId/status': status.dbValue,
+      'orders/$orderId/updatedAt': ServerValue.timestamp,
+    };
+    final String? customerId = order?.customerId;
+    if (customerId != null) {
+      updates['notifications/$customerId/order_${orderId}_status_${status.dbValue}'] =
+          <String, Object?>{
+            'type': status == OrderStatus.cancelled
+                ? 'order_cancelled'
+                : 'order_status',
+            'title': status == OrderStatus.cancelled
+                ? 'Order cancelled'
+                : 'Order update',
+            'body': status == OrderStatus.cancelled
+                ? 'Your order from ${order!.storeName} was cancelled.'
+                : 'Your order from ${order!.storeName} is now ${status.label}.',
+            'orderId': orderId,
+            'createdAt': ServerValue.timestamp,
+            'read': false,
+          };
+    }
+    await _db.update(updates);
     final Order? cancelledOrder = order;
+    if (status == OrderStatus.cancelled &&
+        cancelledOrder?.stockDeducted == true) {
+      final Map<String, int> quantities = <String, int>{};
+      for (final OrderItem item in cancelledOrder!.items) {
+        quantities.update(
+          item.productId,
+          (int quantity) => quantity + item.quantity,
+          ifAbsent: () => item.quantity,
+        );
+      }
+      for (final MapEntry<String, int> entry in quantities.entries) {
+        final String productName = cancelledOrder.items
+            .firstWhere((OrderItem item) => item.productId == entry.key)
+            .productName;
+        await _adjustStock(
+          _StockReservation(
+            productId: entry.key,
+            quantity: entry.value,
+            productName: productName,
+          ),
+          entry.value,
+        );
+      }
+      await _db.child('orders').child(orderId).update(<String, Object?>{
+        'stockDeducted': false,
+        'updatedAt': ServerValue.timestamp,
+      });
+    }
     if (status != OrderStatus.cancelled ||
         cancelledOrder == null ||
         !RegExp(
@@ -687,6 +905,32 @@ class DatabaseService {
     }
   }
 
+  Future<void> _adjustStock(_StockReservation reservation, int quantity) async {
+    if (quantity > 0) {
+      final Product? product = await getProductOnce(reservation.productId);
+      if (product?.stockQuantity == null) return;
+    }
+    final DatabaseReference stockRef = _db
+        .child('products')
+        .child(reservation.productId)
+        .child('stockQuantity');
+    final TransactionResult result = await stockRef.runTransaction((
+      Object? value,
+    ) {
+      final int? current = (value as num?)?.toInt();
+      if (current == null) return Transaction.abort();
+      final int updated = current + quantity;
+      if (updated < 0) return Transaction.abort();
+      return Transaction.success(updated);
+    }, applyLocally: false);
+    if (!result.committed) {
+      throw StateError(
+        'Not enough stock for ${reservation.productName}. '
+        'Refresh the product and try again.',
+      );
+    }
+  }
+
   List<Order> _ordersFromSnapshot(DataSnapshot snapshot) {
     final Object? raw = snapshot.value;
     if (raw is! Map) {
@@ -730,4 +974,16 @@ class _ProductCountReservation {
       maxPerDay: limit,
     );
   }
+}
+
+class _StockReservation {
+  const _StockReservation({
+    required this.productId,
+    required this.quantity,
+    required this.productName,
+  });
+
+  final String productId;
+  final int quantity;
+  final String productName;
 }

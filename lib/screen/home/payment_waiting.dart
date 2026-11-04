@@ -17,11 +17,16 @@ class PaymentWaitingScreen extends StatefulWidget {
   final String orderId;
   final String? checkoutUrl;
 
+  static final Set<String> _activeOrderIds = <String>{};
+
+  static bool isActiveFor(String orderId) => _activeOrderIds.contains(orderId);
+
   @override
   State<PaymentWaitingScreen> createState() => _PaymentWaitingScreenState();
 }
 
-class _PaymentWaitingScreenState extends State<PaymentWaitingScreen> {
+class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
+    with WidgetsBindingObserver {
   final DatabaseService _database = DatabaseService();
   final PaymentService _payments = PaymentService();
   StreamSubscription<Order?>? _subscription;
@@ -31,21 +36,28 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen> {
   bool _receivedEvent = false;
   bool _timedOut = false;
   bool _navigating = false;
+  bool _refreshing = false;
+  bool _checkoutBusy = false;
+  late String? _checkoutUrl = widget.checkoutUrl;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    PaymentWaitingScreen._activeOrderIds.add(widget.orderId);
     _subscription = _database
         .orderStream(widget.orderId)
         .listen(_handleOrder, onError: _handleError);
-    _timeoutTimer = Timer(const Duration(minutes: 3), () {
-      if (!mounted) return;
-      setState(() => _timedOut = true);
-    });
+    _startTimeout();
+    unawaited(_refreshOrder());
   }
 
   void _handleOrder(Order? order) {
     if (!mounted) return;
+    debugPrint(
+      '[PAYMENT] Order ${widget.orderId} payment status: '
+      '${order?.paymentStatus ?? 'missing'}',
+    );
     setState(() {
       _order = order;
       _streamError = null;
@@ -79,15 +91,39 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen> {
     });
   }
 
-  @override
-  void dispose() {
+  void _startTimeout() {
     _timeoutTimer?.cancel();
-    _subscription?.cancel();
-    super.dispose();
+    _timeoutTimer = Timer(const Duration(minutes: 3), () {
+      if (!mounted || _navigating) return;
+      setState(() => _timedOut = true);
+    });
+  }
+
+  Future<void> _refreshOrder() async {
+    if (_refreshing || !mounted) return;
+    setState(() => _refreshing = true);
+    try {
+      final Order? order = await _database.getOrder(widget.orderId);
+      if (mounted) _handleOrder(order);
+    } catch (error) {
+      debugPrint('[PAYMENT] Order refresh failed: $error');
+      if (mounted) setState(() => _streamError = error);
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('[PAYMENT] App resumed; refreshing order ${widget.orderId}');
+      _startTimeout();
+      unawaited(_refreshOrder());
+    }
   }
 
   Future<void> _reopenPaymentPage() async {
-    final String? url = widget.checkoutUrl;
+    final String? url = _checkoutUrl;
     if (url == null || url.isEmpty) return;
     try {
       final bool opened = await _payments.openCheckout(url);
@@ -101,12 +137,37 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen> {
     }
   }
 
+  Future<void> _startOrRetryPayment() async {
+    if (_checkoutBusy || !mounted) return;
+    setState(() => _checkoutBusy = true);
+    try {
+      final String url = await _payments.createCheckout(widget.orderId);
+      if (!mounted) return;
+      setState(() {
+        _checkoutUrl = url;
+        _timedOut = false;
+      });
+      final bool opened = await _payments.openCheckout(url);
+      if (!opened) throw StateError('Could not open the payment page.');
+    } catch (error) {
+      debugPrint('Could not start PayMongo checkout: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not start payment: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _checkoutBusy = false);
+    }
+  }
+
   void _retry() {
     setState(() {
       _streamError = null;
       _order = null;
       _receivedEvent = false;
+      _timedOut = false;
     });
+    _startTimeout();
     _subscription?.cancel();
     _subscription = _database
         .orderStream(widget.orderId)
@@ -134,18 +195,18 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen> {
     } else if (order.paymentStatus == 'failed') {
       body = _messageState(
         Icons.error_outline,
-        'Payment failed.',
-        'Your PayMongo payment was not completed.',
-        'Back to my orders',
-        _backToOrders,
+        'Payment failed or expired.',
+        'Your order is still available. You can try the payment again.',
+        'Retry payment',
+        _startOrRetryPayment,
       );
     } else if (_timedOut) {
       body = _messageState(
         Icons.hourglass_empty,
         "We haven't received your payment confirmation yet.",
         'If you paid, it will update in My Orders shortly.',
-        'View my orders',
-        _backToOrders,
+        'Check again',
+        _refreshAfterTimeout,
       );
     } else {
       body = _waitingState();
@@ -170,11 +231,24 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen> {
               'Waiting for payment confirmation...',
               textAlign: TextAlign.center,
             ),
-            if (widget.checkoutUrl?.isNotEmpty == true) ...<Widget>[
+            if (_checkoutUrl?.isNotEmpty == true) ...<Widget>[
               const SizedBox(height: 20),
               OutlinedButton(
                 onPressed: _reopenPaymentPage,
                 child: const Text('Reopen payment page'),
+              ),
+            ],
+            if (_checkoutUrl == null || _checkoutUrl!.isEmpty) ...<Widget>[
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _checkoutBusy ? null : _startOrRetryPayment,
+                child: _checkoutBusy
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Start payment'),
               ),
             ],
           ],
@@ -223,5 +297,24 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen> {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(builder: (_) => const MyOrdersScreen()),
     );
+  }
+
+  Future<void> _refreshAfterTimeout() async {
+    if (!mounted) return;
+    setState(() {
+      _timedOut = false;
+      _streamError = null;
+    });
+    _startTimeout();
+    await _refreshOrder();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    PaymentWaitingScreen._activeOrderIds.remove(widget.orderId);
+    _timeoutTimer?.cancel();
+    _subscription?.cancel();
+    super.dispose();
   }
 }

@@ -199,6 +199,11 @@ class Order {
     this.paymentStatus = 'unpaid',
     this.paymongoCheckoutSessionId,
     this.paymongoPaymentId,
+    this.stockDeducted = false,
+    this.reviewableProductIds = const <String, bool>{},
+    this.discountCode,
+    this.discountAmount = 0,
+    this.discountPromotionId,
   });
 
   final String id;
@@ -216,6 +221,11 @@ class Order {
   final String paymentStatus;
   final String? paymongoCheckoutSessionId;
   final String? paymongoPaymentId;
+  final bool stockDeducted;
+  final Map<String, bool> reviewableProductIds;
+  final String? discountCode;
+  final double discountAmount;
+  final String? discountPromotionId;
   final int? createdAt;
   final int? updatedAt;
   final OrderFulfillment fulfillment;
@@ -241,6 +251,12 @@ class Order {
     if (paymongoCheckoutSessionId != null)
       'paymongoCheckoutSessionId': paymongoCheckoutSessionId,
     if (paymongoPaymentId != null) 'paymongoPaymentId': paymongoPaymentId,
+    'stockDeducted': stockDeducted,
+    if (reviewableProductIds.isNotEmpty)
+      'reviewableProductIds': reviewableProductIds,
+    if (discountCode != null) 'discountCode': discountCode,
+    if (discountAmount > 0) 'discountAmount': discountAmount,
+    if (discountPromotionId != null) 'discountPromotionId': discountPromotionId,
     'createdAt': createdAt,
     'updatedAt': updatedAt,
   };
@@ -285,6 +301,17 @@ class Order {
       paymentStatus: map['paymentStatus']?.toString() ?? 'unpaid',
       paymongoCheckoutSessionId: map['paymongoCheckoutSessionId']?.toString(),
       paymongoPaymentId: map['paymongoPaymentId']?.toString(),
+      stockDeducted: map['stockDeducted'] as bool? ?? false,
+      reviewableProductIds: map['reviewableProductIds'] is Map
+          ? <String, bool>{
+              for (final MapEntry<dynamic, dynamic> entry
+                  in (map['reviewableProductIds'] as Map).entries)
+                entry.key.toString(): entry.value == true,
+            }
+          : const <String, bool>{},
+      discountCode: map['discountCode']?.toString(),
+      discountAmount: (map['discountAmount'] as num?)?.toDouble() ?? 0,
+      discountPromotionId: map['discountPromotionId']?.toString(),
       createdAt: (map['createdAt'] as num?)?.toInt(),
       updatedAt: (map['updatedAt'] as num?)?.toInt(),
     );

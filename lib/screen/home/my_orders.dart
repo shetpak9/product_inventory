@@ -306,7 +306,8 @@ class _CustomerOrderDetailScreenState extends State<CustomerOrderDetailScreen> {
     return switch (order.paymentStatus) {
       'paid' => 'Paid',
       'failed' => 'Payment failed',
-      _ => 'Awaiting payment',
+      'pending' => 'Payment pending confirmation',
+      _ => 'Payment not started',
     };
   }
 }

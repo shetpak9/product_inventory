@@ -113,6 +113,7 @@ class Product {
     this.category = '',
     this.isAvailable = true,
     this.maxPerDay,
+    this.stockQuantity,
     this.optionGroups = const <ProductOptionGroup>[],
   });
 
@@ -126,6 +127,7 @@ class Product {
   final String category;
   final bool isAvailable;
   final int? maxPerDay;
+  final int? stockQuantity;
   final List<ProductOptionGroup> optionGroups;
 
   /// Tolerates older products that only have `name` and `price`.
@@ -141,6 +143,7 @@ class Product {
       category: map['category']?.toString() ?? '',
       isAvailable: map['isAvailable'] as bool? ?? true,
       maxPerDay: (map['maxPerDay'] as num?)?.toInt(),
+      stockQuantity: (map['stockQuantity'] as num?)?.toInt(),
       optionGroups: map['optionGroups'] is Map
           ? (map['optionGroups'] as Map<dynamic, dynamic>).entries
                 .where((MapEntry<dynamic, dynamic> entry) => entry.value is Map)
@@ -169,6 +172,7 @@ class Product {
       'category': category,
       'isAvailable': isAvailable,
       if (maxPerDay != null) 'maxPerDay': maxPerDay,
+      if (stockQuantity != null) 'stockQuantity': stockQuantity,
       if (optionGroups.isNotEmpty)
         'optionGroups': <String, Object?>{
           for (int index = 0; index < optionGroups.length; index++)

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:product_inventory/model/order.dart';
+import 'package:product_inventory/model/notification.dart';
 import 'package:product_inventory/service/database.dart';
 
 enum OrderNotificationKind { customerStatusChanged, sellerNewOrder }
@@ -40,6 +41,7 @@ class OrderNotifier extends ChangeNotifier {
       FlutterLocalNotificationsPlugin();
   final DatabaseService _database = DatabaseService();
   StreamSubscription<List<Order>>? _subscription;
+  StreamSubscription<List<AppNotification>>? _notificationSubscription;
   String? _activeUid;
   bool? _isSeller;
   bool _initialized = false;
@@ -47,7 +49,6 @@ class OrderNotifier extends ChangeNotifier {
   bool _hasUnseenChanges = false;
   bool _hasBaseline = false;
   int _notificationId = 0;
-  Map<String, OrderStatus> _previousStatuses = <String, OrderStatus>{};
   Map<String, Order> _previousOrders = <String, Order>{};
   void Function(OrderNotificationEvent event)? _onEvent;
   Future<void>? _initialization;
@@ -116,9 +117,10 @@ class OrderNotifier extends ChangeNotifier {
     _isSeller = isSeller;
     _onEvent = onEvent;
     _hasBaseline = false;
-    _previousStatuses = <String, OrderStatus>{};
     _previousOrders = <String, Order>{};
     await previousSubscription?.cancel();
+    await _notificationSubscription?.cancel();
+    _notificationSubscription = null;
     if (_activeUid != uid || _isSeller != isSeller) return;
 
     try {
@@ -138,6 +140,16 @@ class OrderNotifier extends ChangeNotifier {
           debugPrint('Order notification stream failed: $error');
         },
       );
+      if (!isSeller) {
+        _notificationSubscription = _database
+            .notificationsStream(uid)
+            .listen(
+              _handleNotifications,
+              onError: (Object error, StackTrace stackTrace) {
+                debugPrint('Notification stream failed: $error');
+              },
+            );
+      }
     } catch (error) {
       debugPrint('Could not start order notification stream: $error');
     }
@@ -180,26 +192,36 @@ class OrderNotifier extends ChangeNotifier {
             ),
           );
         }
-      } else {
-        final OrderStatus? previousStatus = _previousStatuses[order.id];
-        if (previousStatus != null && previousStatus != order.status) {
-          _publish(
-            OrderNotificationEvent(
-              kind: OrderNotificationKind.customerStatusChanged,
-              order: order,
-              status: order.status,
-            ),
-          );
-        }
       }
     }
+
     _remember(orders);
   }
 
+  Set<String> _previousNotificationIds = <String>{};
+
+  void _handleNotifications(List<AppNotification> notifications) {
+    final Set<String> currentIds = notifications
+        .map((AppNotification notification) => notification.id)
+        .toSet();
+    final bool hasUnread = notifications.any(
+      (AppNotification notification) => !notification.read,
+    );
+    if (_previousNotificationIds.isNotEmpty) {
+      for (final AppNotification notification in notifications) {
+        if (!_previousNotificationIds.contains(notification.id)) {
+          unawaited(_showAppNotification(notification));
+        }
+      }
+    }
+    _previousNotificationIds = currentIds;
+    if (_hasUnseenChanges != hasUnread) {
+      _hasUnseenChanges = hasUnread;
+      notifyListeners();
+    }
+  }
+
   void _remember(List<Order> orders) {
-    _previousStatuses = <String, OrderStatus>{
-      for (final Order order in orders) order.id: order.status,
-    };
     _previousOrders = <String, Order>{
       for (final Order order in orders) order.id: order,
     };
@@ -236,6 +258,30 @@ class OrderNotifier extends ChangeNotifier {
     }
   }
 
+  Future<void> _showAppNotification(AppNotification notification) async {
+    if (!_initialized) return;
+    try {
+      await _notifications.show(
+        id: _notificationId++,
+        title: notification.title,
+        body: notification.body,
+        notificationDetails: const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'order_updates',
+            'Order updates',
+            channelDescription:
+                'Notifications about customer and seller order updates.',
+            importance: Importance.defaultImportance,
+            priority: Priority.defaultPriority,
+          ),
+          iOS: DarwinNotificationDetails(),
+        ),
+      );
+    } catch (error) {
+      debugPrint('Could not show persisted notification: $error');
+    }
+  }
+
   void markOrdersOpened() {
     if (!_hasUnseenChanges) return;
     _hasUnseenChanges = false;
@@ -249,10 +295,14 @@ class OrderNotifier extends ChangeNotifier {
     _onEvent = null;
     _hasBaseline = false;
     _hasUnseenChanges = false;
-    _previousStatuses = <String, OrderStatus>{};
     _previousOrders = <String, Order>{};
+    _previousNotificationIds = <String>{};
     final StreamSubscription<List<Order>>? subscription = _subscription;
     _subscription = null;
     await subscription?.cancel();
+    final StreamSubscription<List<AppNotification>>? notificationSubscription =
+        _notificationSubscription;
+    _notificationSubscription = null;
+    await notificationSubscription?.cancel();
   }
 }
