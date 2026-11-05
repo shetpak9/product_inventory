@@ -159,6 +159,29 @@ async function writeCustomerNotification(order, type, title, body) {
     createdAt: Date.now(),
     read: false,
   });
+  console.log(
+    `[WEBHOOK] Notification ${notificationId} written for customer ${order.customerId}.`,
+  );
+}
+
+async function markOrderPaid(order, payment) {
+  if (order.paymentStatus === "paid") {
+    console.log(`[PAYMENT] Order ${order.id} is already paid.`);
+    return false;
+  }
+  await database().ref(`orders/${order.id}`).update({
+    paymentStatus: "paid",
+    paymongoPaymentId: payment?.id || null,
+    updatedAt: Date.now(),
+  });
+  console.log(`[PAYMENT] Order ${order.id} updated to paid.`);
+  await writeCustomerNotification(
+    order,
+    "payment_paid",
+    "Payment confirmed",
+    `Payment for your order from ${order.storeName || "the store"} was confirmed.`,
+  );
+  return true;
 }
 
 function money(value, label) {
@@ -523,7 +546,14 @@ async function createCheckout(request, response) {
     const result = await paymongoResponse.json();
     if (!paymongoResponse.ok) {
       console.warn("PayMongo checkout creation failed:", paymongoResponse.status);
-      throw new Error("PayMongo could not create a checkout session.");
+      const paymongoDetail = Array.isArray(result?.errors)
+        ? result.errors
+          .map((item) => item?.detail)
+          .find((detail) => typeof detail === "string")
+        : null;
+      throw new Error(
+        paymongoDetail || "PayMongo could not create a checkout session.",
+      );
     }
     const data = asMap(result.data);
     const attributes = asMap(data?.attributes);
@@ -566,24 +596,136 @@ async function createCheckout(request, response) {
 }
 
 function verifyWebhook(request) {
-  const header = request.get("x-paymongo-signature") || "";
-  if (!process.env.PAYMONGO_WEBHOOK_SECRET) return false;
-  const parts = Object.fromEntries(header.split(",").map((part) => part.split("=")));
-  if (!parts.t || (!parts.te && !parts.li) || !request.rawBody) return false;
-  const signature = parts.te || parts.li;
-  const expected = crypto.createHmac("sha256", process.env.PAYMONGO_WEBHOOK_SECRET || "")
-    .update(`${parts.t}.${request.rawBody.toString()}`).digest("hex");
-  return signature.length === expected.length &&
+  const header = request.get("Paymongo-Signature") || "";
+  const secret = process.env.PAYMONGO_WEBHOOK_SECRET;
+  const mode = String(process.env.PAYMONGO_MODE || "test").toLowerCase();
+  const parts = Object.fromEntries(header.split(",").map((part) => {
+    const separator = part.indexOf("=");
+    return separator === -1
+      ? [part.trim(), ""]
+      : [part.slice(0, separator).trim(), part.slice(separator + 1).trim()];
+  }));
+  const signature = mode === "live" ? parts.li : parts.te;
+  console.log(
+    `[WEBHOOK] Signature metadata: mode=${mode}, ` +
+    `headerPresent=${header.length > 0}, secretConfigured=${Boolean(secret)}, ` +
+    `providedLength=${signature?.length || 0}.`,
+  );
+  if (!secret || !parts.t || !signature || !request.rawBody) {
+    console.warn(
+      `[WEBHOOK] Signature verification failed: missing ${!secret ? "secret" : "signature fields"}.`,
+    );
+    return false;
+  }
+  const expected = crypto.createHmac("sha256", secret)
+    .update(`${parts.t}.${request.rawBody.toString("utf8")}`)
+    .digest("hex");
+  const valid = signature.length === expected.length &&
     crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  console.log(`[WEBHOOK] Signature ${valid ? "valid" : "invalid"} (${mode} mode).`);
+  return valid;
+}
+
+async function verifyPayment(request, response) {
+  const startedAt = Date.now();
+  console.log("[VERIFY] Request received.");
+  const decoded = await authenticate(request, response);
+  if (!decoded) return;
+  const body = asMap(request.body);
+  const orderId = typeof body?.orderId === "string" ? body.orderId.trim() : "";
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(orderId)) {
+    console.warn("[VERIFY] Invalid orderId.");
+    return jsonError(response, 400, "A valid orderId is required.");
+  }
+  try {
+    console.log(`[VERIFY] Loading order ${orderId}.`);
+    const snapshot = await withTimeout(
+      database().ref(`orders/${orderId}`).get(),
+      CHECKOUT_OPERATION_TIMEOUT_MS,
+      "Order verification read",
+    );
+    const orderData = asMap(snapshot.val());
+    if (!orderData || orderData.customerId !== decoded.uid ||
+        orderData.paymentMethod !== "paymongo") {
+      console.warn("[VERIFY] Order not found or ownership/payment method failed.");
+      return jsonError(response, 404, "Order not found.");
+    }
+    const order = { ...orderData, id: orderId };
+    if (order.paymentStatus === "paid") {
+      console.log("[VERIFY] Order already paid.");
+      return response.json({ orderId, paymentStatus: "paid" });
+    }
+    const sessionId = String(order.paymongoCheckoutSessionId || "");
+    if (!sessionId) {
+      console.warn("[VERIFY] No PayMongo checkout session ID.");
+      return response.json({ orderId, paymentStatus: order.paymentStatus });
+    }
+    const secret = process.env.PAYMONGO_SECRET_KEY;
+    if (!secret) throw new Error("PAYMONGO_SECRET_KEY is not configured.");
+    console.log(`[VERIFY] Fetching PayMongo session (${elapsed(startedAt)}).`);
+    const paymongoResponse = await withTimeout(
+      fetch(`${PAYMONGO_URL}/${encodeURIComponent(sessionId)}`, {
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${secret}:`).toString("base64")}`,
+        },
+        signal: AbortSignal.timeout(CHECKOUT_OPERATION_TIMEOUT_MS),
+      }),
+      CHECKOUT_OPERATION_TIMEOUT_MS,
+      "PayMongo verification request",
+    );
+    const result = await paymongoResponse.json();
+    if (!paymongoResponse.ok) {
+      console.warn(`[VERIFY] PayMongo returned HTTP ${paymongoResponse.status}.`);
+      throw new Error("PayMongo verification failed.");
+    }
+    const attributes = asMap(asMap(result.data)?.attributes);
+    const payment = Array.isArray(attributes?.payments)
+      ? attributes.payments.find(
+        (entry) => asMap(entry)?.attributes?.status === "paid",
+      )
+      : null;
+    const paymentAttributes = asMap(payment?.attributes);
+    const validPaidPayment = paymentAttributes?.currency === "PHP" &&
+      Number(paymentAttributes.amount) === Number(order.paymentAmount);
+    console.log(
+      `[VERIFY] Payment paid=${Boolean(payment)}, valid=${validPaidPayment}, ` +
+      `eventAmount=${paymentAttributes?.amount ?? "(missing)"}, ` +
+      `orderAmount=${order.paymentAmount ?? "(missing)"}.`,
+    );
+    if (!validPaidPayment) {
+      return response.json({ orderId, paymentStatus: order.paymentStatus });
+    }
+    await markOrderPaid(order, payment);
+    console.log(`[VERIFY] Completed in ${elapsed(startedAt)}.`);
+    return response.json({ orderId, paymentStatus: "paid" });
+  } catch (error) {
+    console.error(`[VERIFY] Failed after ${elapsed(startedAt)}: ${error.stack || error}`);
+    const status = error.message.includes("timed out") ||
+      error.name === "TimeoutError" || error.name === "AbortError" ? 504 : 502;
+    return jsonError(
+      response,
+      status,
+      status === 504 ? "Payment verification took too long." : "Payment verification failed.",
+    );
+  }
 }
 
 async function paymongoWebhook(request, response) {
-  if (request.method !== "POST") return jsonError(response, 405, "POST is required.");
-  if (!verifyWebhook(request)) return jsonError(response, 401, "Invalid webhook signature.");
+  const startedAt = Date.now();
+  console.log("[WEBHOOK] Request received.");
+  if (request.method !== "POST") {
+    console.warn("[WEBHOOK] Ignored: method was not POST.");
+    return jsonError(response, 405, "POST is required.");
+  }
+  if (!verifyWebhook(request)) {
+    console.warn("[WEBHOOK] Ignored: invalid signature.");
+    return jsonError(response, 401, "Invalid webhook signature.");
+  }
   let payload;
   try {
     payload = asMap(JSON.parse(request.rawBody.toString("utf8")));
   } catch (_) {
+    console.warn("[WEBHOOK] Ignored: invalid JSON payload.");
     return jsonError(response, 400, "Invalid webhook payload.");
   }
   const webhookData = asMap(payload?.data);
@@ -593,7 +735,11 @@ async function paymongoWebhook(request, response) {
   const eventType = String(webhookAttributes?.type || webhookData?.type || "");
   const event = asMap(webhookAttributes?.data);
   const attributes = asMap(event?.attributes);
-  if (!eventId || !event || !attributes) return jsonError(response, 400, "Invalid webhook payload.");
+  console.log(`[WEBHOOK] eventType=${eventType || "(missing)"}, eventId=${eventId || "(missing)"}.`);
+  if (!eventId || !event || !attributes) {
+    console.warn("[WEBHOOK] Ignored: missing event data or attributes.");
+    return jsonError(response, 400, "Invalid webhook payload.");
+  }
   const eventRef = database().ref(`paymentWebhookEvents/${eventId}`);
   const claimed = await eventRef.transaction((current) => {
     const now = Date.now();
@@ -601,11 +747,14 @@ async function paymongoWebhook(request, response) {
     if (current?.processingAt && now - current.processingAt < 300000) return;
     return { type: eventType, processingAt: now };
   });
+  console.log(`[WEBHOOK] Event claim committed=${claimed.committed}.`);
   if (!claimed.committed) {
     const current = (await eventRef.get()).val();
     if (current?.completed === true) {
+      console.log(`[WEBHOOK] Ignored: event ${eventId} was already completed.`);
       return response.status(200).send("already processed");
     }
+    console.warn(`[WEBHOOK] Ignored: event ${eventId} is already processing.`);
     return response.status(503).send("webhook is being processed");
   }
   const completeEvent = () => eventRef.update({
@@ -613,15 +762,28 @@ async function paymongoWebhook(request, response) {
     processedAt: Date.now(),
   });
   const orderId = String(attributes.reference_number || attributes.metadata?.orderId || "");
+  console.log(`[WEBHOOK] orderId=${orderId || "(missing)"}.`);
   if (!orderId) {
+    console.warn("[WEBHOOK] Ignored: no order ID in reference_number or metadata.");
     await completeEvent();
+    console.log(`[WEBHOOK] Event ${eventId} marked completed (${elapsed(startedAt)}).`);
     return response.status(200).send("ignored");
   }
   const orderSnapshot = await database().ref(`orders/${orderId}`).get();
-  const order = { ...asMap(orderSnapshot.val()), id: orderId };
-  if (!order || order.paymongoCheckoutSessionId !== event.id ||
-    order.paymentMethod !== "paymongo") {
+  const orderData = asMap(orderSnapshot.val());
+  const order = orderData ? { ...orderData, id: orderId } : null;
+  if (!order) {
+    console.warn("[WEBHOOK] Retryable failure: order was not found.");
+    return response.status(409).send("order not found");
+  }
+  if (order.paymongoCheckoutSessionId !== event.id) {
+    console.warn("[WEBHOOK] Retryable failure: checkout session ID did not match.");
+    return response.status(409).send("checkout session mismatch");
+  }
+  if (order.paymentMethod !== "paymongo") {
+    console.warn("[WEBHOOK] Ignored: order payment method was not PayMongo.");
     await completeEvent();
+    console.log(`[WEBHOOK] Event ${eventId} marked completed (${elapsed(startedAt)}).`);
     return response.status(200).send("ignored");
   }
   const payment = Array.isArray(attributes.payments)
@@ -633,35 +795,38 @@ async function paymongoWebhook(request, response) {
     Number(paymentAttributes.amount) === Number(order.paymentAmount);
   const failed = ["checkout_session.payment.failed", "checkout_session.expired",
     "checkout_session.payment.cancelled"].includes(eventType);
+  console.log(
+    `[WEBHOOK] Payment evaluation: paid=${paid}, failed=${failed}, ` +
+    `eventAmount=${paymentAttributes?.amount ?? "(missing)"}, ` +
+    `orderAmount=${order.paymentAmount ?? "(missing)"}.`,
+  );
   if (order.paymentStatus === "paid") {
+    console.log("[WEBHOOK] Ignored: order was already paid.");
     await completeEvent();
+    console.log(`[WEBHOOK] Event ${eventId} marked completed (${elapsed(startedAt)}).`);
     return response.status(200).send("already paid");
   }
   if (paid) {
-    await database().ref(`orders/${orderId}`).update({
-      paymentStatus: "paid",
-      paymongoPaymentId: payment?.id || null,
-      updatedAt: Date.now(),
-    });
-    await writeCustomerNotification(
-      order,
-      "payment_paid",
-      "Payment confirmed",
-      `Payment for your order from ${order.storeName || "the store"} was confirmed.`,
-    );
+    await markOrderPaid(order, payment);
   } else if (failed) {
     await database().ref(`orders/${orderId}`).update({
       paymentStatus: "failed",
       updatedAt: Date.now(),
     });
+    console.log(`[WEBHOOK] Order ${orderId} updated to failed.`);
     await writeCustomerNotification(
       order,
       "payment_failed",
       "Payment failed",
       `Payment for your order from ${order.storeName || "the store"} failed or expired.`,
     );
+  } else {
+    console.warn("[WEBHOOK] Ignored: event was neither a valid paid nor failed event.");
   }
+
+
   await completeEvent();
+  console.log(`[WEBHOOK] Event ${eventId} marked completed (${elapsed(startedAt)}).`);
   return response.status(200).send("ok");
 }
 
@@ -671,6 +836,7 @@ app.get("/api/health", (request, response) => {
   response.status(200).json({ status: "ok", message: "Payments backend is running" });
 });
 app.post("/api/payments/checkout", express.json(), createCheckout);
+app.post("/api/payments/verify", express.json(), verifyPayment);
 app.post("/api/payments/apply-discount", express.json(), async (request, response) => {
   const decoded = await authenticate(request, response);
   if (!decoded) return;
@@ -723,15 +889,34 @@ app.post("/api/promotions/notify", express.json(), async (request, response) => 
 app.post(
   "/api/payments/webhook",
   express.raw({ type: "application/json", limit: "1mb" }),
-  (request, response) => {
+  async (request, response) => {
     request.rawBody = request.body;
-    return paymongoWebhook(request, response);
+    try {
+      return await paymongoWebhook(request, response);
+    } catch (error) {
+      console.error(`[WEBHOOK] Unhandled failure: ${error.stack || error}`);
+      return jsonError(response, 500, "Webhook processing failed.");
+    }
   },
 );
 
 const port = Number(process.env.PORT || 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error("PORT must be a valid TCP port.");
+}
+const paymentMode = String(process.env.PAYMONGO_MODE || "test").toLowerCase();
+console.log(
+  `[STARTUP] PAYMONGO_WEBHOOK_SECRET configured: ${Boolean(process.env.PAYMONGO_WEBHOOK_SECRET)}`,
+);
+console.log(
+  `[STARTUP] PAYMONGO_SECRET_KEY configured: ${Boolean(process.env.PAYMONGO_SECRET_KEY)}`,
+);
+console.log(`[STARTUP] PAYMONGO_MODE: ${paymentMode}`);
+if (
+  (process.env.PAYMONGO_SECRET_KEY?.startsWith("sk_test") && paymentMode === "live") ||
+  (process.env.PAYMONGO_SECRET_KEY?.startsWith("sk_live") && paymentMode === "test")
+) {
+  console.warn("[STARTUP] PayMongo key prefix and PAYMONGO_MODE do not match.");
 }
 app.listen(port, "0.0.0.0", () => {
   console.log(`Payments backend listening on 0.0.0.0:${port}`);

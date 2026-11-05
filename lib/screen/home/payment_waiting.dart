@@ -12,10 +12,12 @@ class PaymentWaitingScreen extends StatefulWidget {
     super.key,
     required this.orderId,
     this.checkoutUrl,
+    this.result = 'success',
   });
 
   final String orderId;
   final String? checkoutUrl;
+  final String result;
 
   static final Set<String> _activeOrderIds = <String>{};
 
@@ -31,6 +33,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
   final PaymentService _payments = PaymentService();
   StreamSubscription<Order?>? _subscription;
   Timer? _timeoutTimer;
+  Timer? _verificationTimer;
   Order? _order;
   Object? _streamError;
   bool _receivedEvent = false;
@@ -38,6 +41,8 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
   bool _navigating = false;
   bool _refreshing = false;
   bool _checkoutBusy = false;
+  int _verificationAttempts = 0;
+  bool _verificationExhausted = false;
   late String? _checkoutUrl = widget.checkoutUrl;
 
   @override
@@ -48,8 +53,49 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     _subscription = _database
         .orderStream(widget.orderId)
         .listen(_handleOrder, onError: _handleError);
-    _startTimeout();
+    if (widget.result == 'cancel') {
+      _verificationExhausted = true;
+    } else {
+      _startTimeout();
+      _startVerification();
+    }
     unawaited(_refreshOrder());
+  }
+
+  void _startVerification() {
+    _verificationTimer?.cancel();
+    _verificationAttempts = 0;
+    _verificationExhausted = false;
+    unawaited(_verifyPayment());
+    _verificationTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => unawaited(_verifyPayment()),
+    );
+  }
+
+  Future<void> _verifyPayment() async {
+    if (!mounted ||
+        widget.result == 'cancel' ||
+        _verificationExhausted ||
+        _order?.paymentStatus == 'paid') {
+      return;
+    }
+    if (_verificationAttempts >= 10) {
+      _verificationExhausted = true;
+      _verificationTimer?.cancel();
+      if (mounted) setState(() => _timedOut = true);
+      return;
+    }
+    _verificationAttempts++;
+    try {
+      debugPrint(
+        '[VERIFY] Attempt $_verificationAttempts/10 for ${widget.orderId}',
+      );
+      final String status = await _payments.verifyPayment(widget.orderId);
+      if (status == 'paid') await _refreshOrder();
+    } catch (error) {
+      debugPrint('[VERIFY] Payment verification attempt failed: $error');
+    }
   }
 
   void _handleOrder(Order? order) {
@@ -119,6 +165,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
       debugPrint('[PAYMENT] App resumed; refreshing order ${widget.orderId}');
       _startTimeout();
       unawaited(_refreshOrder());
+      if (widget.result != 'cancel') unawaited(_verifyPayment());
     }
   }
 
@@ -168,6 +215,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
       _timedOut = false;
     });
     _startTimeout();
+    _startVerification();
     _subscription?.cancel();
     _subscription = _database
         .orderStream(widget.orderId)
@@ -192,6 +240,14 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
         'Back to my orders',
         _backToOrders,
       );
+    } else if (widget.result == 'cancel') {
+      body = _messageState(
+        Icons.cancel_outlined,
+        'Payment cancelled.',
+        'Your order remains unpaid. You can try paying again from My Orders.',
+        'Back to my orders',
+        _backToOrders,
+      );
     } else if (order.paymentStatus == 'failed') {
       body = _messageState(
         Icons.error_outline,
@@ -204,9 +260,9 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
       body = _messageState(
         Icons.hourglass_empty,
         "We haven't received your payment confirmation yet.",
-        'If you paid, it will update in My Orders shortly.',
-        'Check again',
-        _refreshAfterTimeout,
+        'Check your orders in a moment.',
+        'Go to order',
+        _goToOrder,
       );
     } else {
       body = _waitingState();
@@ -299,14 +355,12 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     );
   }
 
-  Future<void> _refreshAfterTimeout() async {
-    if (!mounted) return;
-    setState(() {
-      _timedOut = false;
-      _streamError = null;
-    });
-    _startTimeout();
-    await _refreshOrder();
+  void _goToOrder() {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => CustomerOrderDetailScreen(orderId: widget.orderId),
+      ),
+    );
   }
 
   @override
@@ -314,6 +368,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     WidgetsBinding.instance.removeObserver(this);
     PaymentWaitingScreen._activeOrderIds.remove(widget.orderId);
     _timeoutTimer?.cancel();
+    _verificationTimer?.cancel();
     _subscription?.cancel();
     super.dispose();
   }

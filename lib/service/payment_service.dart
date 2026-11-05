@@ -193,7 +193,8 @@ class PaymentService {
         } else if (decoded is Map && decoded['error'] is String) {
           message = decoded['error'] as String;
         } else {
-          message = 'Unable to start PayMongo checkout.';
+          message =
+              'Unable to start PayMongo checkout (HTTP ${response.statusCode}).';
         }
         throw StateError(message);
       }
@@ -218,6 +219,53 @@ class PaymentService {
       throw StateError('Could not connect to the payment service. Try again.');
     } on FirebaseAuthException catch (error) {
       debugPrint('Could not refresh Firebase ID token: ${error.code}');
+      throw StateError(
+        'Your sign-in session has expired. Please sign in again.',
+      );
+    }
+  }
+
+  Future<String> verifyPayment(String orderId) async {
+    final User? user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('A signed-in user is required to verify payment.');
+    }
+    try {
+      final String token =
+          await user.getIdToken(true).timeout(const Duration(seconds: 15)) ??
+          '';
+      final http.Response response = await _client
+          .post(
+            Uri.parse('$_baseUrl/api/payments/verify'),
+            headers: <String, String>{
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode(<String, String>{'orderId': orderId}),
+          )
+          .timeout(const Duration(seconds: 20));
+      dynamic decoded;
+      try {
+        decoded = jsonDecode(response.body);
+      } on FormatException {
+        decoded = null;
+      }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw StateError(
+          decoded is Map && decoded['error'] is String
+              ? decoded['error'] as String
+              : 'Payment verification failed.',
+        );
+      }
+      if (decoded is! Map || decoded['paymentStatus'] is! String) {
+        throw StateError('Payment verification returned an invalid response.');
+      }
+      return decoded['paymentStatus'] as String;
+    } on TimeoutException {
+      throw StateError('Payment verification took too long. Please try again.');
+    } on SocketException {
+      throw StateError('Could not connect to verify payment.');
+    } on FirebaseAuthException {
       throw StateError(
         'Your sign-in session has expired. Please sign in again.',
       );

@@ -80,22 +80,11 @@ class _MainScreenState extends State<MainScreen> {
     final NavigatorState? navigator =
         _navigatorKeys[_currentIndex].currentState;
     if (navigator == null) return;
-    if (link.result == 'cancel') {
-      navigator.push(
-        MaterialPageRoute<void>(
-          builder: (_) => CustomerOrderDetailScreen(
-            orderId: link.orderId,
-            initialMessage:
-                'Payment was not completed. You can try paying again',
-          ),
-        ),
-      );
-      return;
-    }
     if (PaymentWaitingScreen.isActiveFor(link.orderId)) return;
     navigator.push(
       MaterialPageRoute<void>(
-        builder: (_) => PaymentWaitingScreen(orderId: link.orderId),
+        builder: (_) =>
+            PaymentWaitingScreen(orderId: link.orderId, result: link.result),
       ),
     );
   }
