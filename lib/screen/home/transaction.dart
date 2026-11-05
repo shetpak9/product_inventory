@@ -9,7 +9,6 @@ import 'package:product_inventory/model/store.dart';
 import 'package:product_inventory/model/user.dart';
 import 'package:product_inventory/screen/home/cart.dart';
 import 'package:product_inventory/screen/home/order_confirmation.dart';
-import 'package:product_inventory/screen/home/payment_waiting.dart';
 import 'package:product_inventory/screen/account/profile_screen.dart'
     show AddressFormScreen, EditProfileScreen;
 import 'package:product_inventory/service/database.dart';
@@ -238,8 +237,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   Future<void> _pay() async {
     if (_isPaying) return;
     setState(() => _isPaying = true);
-    List<String> placedOrderIds = <String>[];
-
     try {
       final User? user = FirebaseAuth.instance.currentUser;
       if (user == null) {
@@ -477,7 +474,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         );
       }
       final List<String> orderIds = await _database.placeOrders(orders);
-      placedOrderIds = orderIds;
       if (_discountCodeController.text.trim().isNotEmpty) {
         final ({double discountAmount, double finalTotal}) discount =
             await _payments.applyDiscount(
@@ -487,9 +483,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         _discountAmount = discount.discountAmount;
         _validatedFinalTotal = discount.finalTotal;
       }
-      String? checkoutUrl;
       if (_paymentMethod == 'paymongo') {
-        checkoutUrl = await _payments.createCheckout(orderIds.single);
+        final String checkoutUrl = await _payments.createCheckout(
+          orderIds.single,
+        );
         final bool opened = await _payments.openCheckout(checkoutUrl);
         if (!opened) {
           throw StateError('Could not open the PayMongo checkout page.');
@@ -503,43 +500,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
 
       if (!mounted) return;
+      if (_paymentMethod == 'paymongo') {
+        setState(() => _isPaying = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Complete payment in the browser. We will confirm it when you return.',
+            ),
+          ),
+        );
+        return;
+      }
       final double total = orders.fold<double>(
         0,
         (double sum, Order order) => sum + order.total,
       );
       final double finalTotal = _validatedFinalTotal ?? total - _discountAmount;
-      if (_paymentMethod == 'paymongo') {
-        await Navigator.of(context).pushReplacement(
-          MaterialPageRoute<void>(
-            builder: (_) => PaymentWaitingScreen(
-              orderId: orderIds.single,
-              checkoutUrl: checkoutUrl,
-            ),
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => OrderConfirmationScreen(
+            orderCount: orders.length,
+            total: finalTotal,
           ),
-        );
-      } else {
-        await Navigator.of(context).pushReplacement(
-          MaterialPageRoute<void>(
-            builder: (_) => OrderConfirmationScreen(
-              orderCount: orders.length,
-              total: finalTotal,
-            ),
-          ),
-        );
-      }
+        ),
+      );
     } catch (error) {
       debugPrint('Checkout failed: $error');
       if (!mounted) return;
       setState(() => _isPaying = false);
-      if (_paymentMethod == 'paymongo' && placedOrderIds.length == 1) {
-        await Navigator.of(context).pushReplacement(
-          MaterialPageRoute<void>(
-            builder: (_) =>
-                PaymentWaitingScreen(orderId: placedOrderIds.single),
-          ),
-        );
-        return;
-      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(

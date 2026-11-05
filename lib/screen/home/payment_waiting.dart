@@ -41,6 +41,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
   bool _navigating = false;
   bool _refreshing = false;
   bool _checkoutBusy = false;
+  bool _verificationInFlight = false;
   int _verificationAttempts = 0;
   bool _verificationExhausted = false;
   late String? _checkoutUrl = widget.checkoutUrl;
@@ -77,16 +78,19 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     if (!mounted ||
         widget.result == 'cancel' ||
         _verificationExhausted ||
+        _verificationInFlight ||
         _order?.paymentStatus == 'paid') {
       return;
     }
     if (_verificationAttempts >= 10) {
       _verificationExhausted = true;
       _verificationTimer?.cancel();
+      _timeoutTimer?.cancel();
       if (mounted) setState(() => _timedOut = true);
       return;
     }
     _verificationAttempts++;
+    _verificationInFlight = true;
     try {
       debugPrint(
         '[VERIFY] Attempt $_verificationAttempts/10 for ${widget.orderId}',
@@ -95,6 +99,8 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
       if (status == 'paid') await _refreshOrder();
     } catch (error) {
       debugPrint('[VERIFY] Payment verification attempt failed: $error');
+    } finally {
+      _verificationInFlight = false;
     }
   }
 
@@ -111,6 +117,8 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     });
     if (order?.paymentStatus == 'paid' &&
         order?.status != OrderStatus.cancelled) {
+      _verificationTimer?.cancel();
+      _timeoutTimer?.cancel();
       _showConfirmation(order!);
     }
   }
@@ -226,7 +234,15 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
   Widget build(BuildContext context) {
     final Order? order = _order;
     final Widget body;
-    if (_streamError != null) {
+    if (widget.result == 'cancel') {
+      body = _messageState(
+        Icons.cancel_outlined,
+        'Payment cancelled.',
+        'Your order remains unpaid. You can try paying again from My Orders.',
+        'Back to my orders',
+        _backToOrders,
+      );
+    } else if (_streamError != null) {
       body = _errorState('Unable to load your order.', _retry);
     } else if (!_receivedEvent) {
       body = const Center(child: CircularProgressIndicator());
@@ -237,14 +253,6 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
         Icons.cancel_outlined,
         'This order was cancelled.',
         'The payment cannot be confirmed for a cancelled order.',
-        'Back to my orders',
-        _backToOrders,
-      );
-    } else if (widget.result == 'cancel') {
-      body = _messageState(
-        Icons.cancel_outlined,
-        'Payment cancelled.',
-        'Your order remains unpaid. You can try paying again from My Orders.',
         'Back to my orders',
         _backToOrders,
       );
