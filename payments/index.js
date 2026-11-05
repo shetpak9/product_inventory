@@ -625,7 +625,21 @@ function verifyWebhook(request) {
   console.log(`[WEBHOOK] Signature ${valid ? "valid" : "invalid"} (${mode} mode).`);
   return valid;
 }
-
+async function fetchCheckoutSession(sessionId, secret) {
+  const auth = `Basic ${Buffer.from(`${secret}:`).toString("base64")}`;
+  const url = `https://api.paymongo.com/v1/checkout_sessions/${encodeURIComponent(sessionId)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: auth },
+    signal: AbortSignal.timeout(CHECKOUT_OPERATION_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    console.warn(`[VERIFY] GET v1 checkout session -> HTTP ${res.status}: ${text.slice(0, 500)}`);
+    throw new Error("PayMongo verification failed.");
+  }
+  console.log(`[VERIFY] GET v1 checkout session -> HTTP ${res.status}`);
+  return res.json();
+}
 async function verifyPayment(request, response) {
   const startedAt = Date.now();
   console.log("[VERIFY] Request received.");
@@ -663,21 +677,11 @@ async function verifyPayment(request, response) {
     const secret = process.env.PAYMONGO_SECRET_KEY;
     if (!secret) throw new Error("PAYMONGO_SECRET_KEY is not configured.");
     console.log(`[VERIFY] Fetching PayMongo session (${elapsed(startedAt)}).`);
-    const paymongoResponse = await withTimeout(
-      fetch(`${PAYMONGO_URL}/${encodeURIComponent(sessionId)}`, {
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${secret}:`).toString("base64")}`,
-        },
-        signal: AbortSignal.timeout(CHECKOUT_OPERATION_TIMEOUT_MS),
-      }),
-      CHECKOUT_OPERATION_TIMEOUT_MS,
+        const result = await withTimeout(
+      fetchCheckoutSession(sessionId, secret),
+      CHECKOUT_OPERATION_TIMEOUT_MS * 2,
       "PayMongo verification request",
     );
-    const result = await paymongoResponse.json();
-    if (!paymongoResponse.ok) {
-      console.warn(`[VERIFY] PayMongo returned HTTP ${paymongoResponse.status}.`);
-      throw new Error("PayMongo verification failed.");
-    }
     const attributes = asMap(asMap(result.data)?.attributes);
     const payment = Array.isArray(attributes?.payments)
       ? attributes.payments.find(
@@ -732,9 +736,10 @@ async function paymongoWebhook(request, response) {
   const webhookAttributes = asMap(webhookData?.attributes);
   const eventId = String(webhookData?.id || payload?.id || crypto.createHash("sha256")
     .update(request.rawBody).digest("hex"));
-  const eventType = String(webhookAttributes?.type || webhookData?.type || "");
-  const event = asMap(webhookAttributes?.data);
-  const attributes = asMap(event?.attributes);
+// v1: data.attributes.{type,data}   v2: data.{type,data}
+const eventType = String(webhookAttributes?.type || webhookData?.type || "");
+const event = asMap(webhookAttributes?.data) || asMap(webhookData?.data);
+const attributes = asMap(event?.attributes);
   console.log(`[WEBHOOK] eventType=${eventType || "(missing)"}, eventId=${eventId || "(missing)"}.`);
   if (!eventId || !event || !attributes) {
     console.warn("[WEBHOOK] Ignored: missing event data or attributes.");
