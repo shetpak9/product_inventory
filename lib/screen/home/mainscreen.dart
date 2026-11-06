@@ -80,7 +80,7 @@ class _MainScreenState extends State<MainScreen> {
     final NavigatorState? navigator =
         _navigatorKeys[_currentIndex].currentState;
     if (navigator == null) return;
-    if (PaymentWaitingScreen.isActiveFor(link.orderId)) return;
+    if (PaymentWaitingScreen.handleReturn(link.orderId, link.result)) return;
     navigator.push(
       MaterialPageRoute<void>(
         builder: (_) =>

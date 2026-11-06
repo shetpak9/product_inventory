@@ -9,6 +9,7 @@ import 'package:product_inventory/model/store.dart';
 import 'package:product_inventory/model/user.dart';
 import 'package:product_inventory/screen/home/cart.dart';
 import 'package:product_inventory/screen/home/order_confirmation.dart';
+import 'package:product_inventory/screen/home/payment_waiting.dart';
 import 'package:product_inventory/screen/account/profile_screen.dart'
     show AddressFormScreen, EditProfileScreen;
 import 'package:product_inventory/service/database.dart';
@@ -483,10 +484,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         _discountAmount = discount.discountAmount;
         _validatedFinalTotal = discount.finalTotal;
       }
+      String? checkoutUrl;
       if (_paymentMethod == 'paymongo') {
-        final String checkoutUrl = await _payments.createCheckout(
-          orderIds.single,
-        );
+        checkoutUrl = await _payments.createCheckout(orderIds.single);
         final bool opened = await _payments.openCheckout(checkoutUrl);
         if (!opened) {
           throw StateError('Could not open the PayMongo checkout page.');
@@ -501,11 +501,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
       if (!mounted) return;
       if (_paymentMethod == 'paymongo') {
-        setState(() => _isPaying = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Complete payment in the browser. We will confirm it when you return.',
+        await Navigator.of(context).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (_) => PaymentWaitingScreen(
+              orderId: orderIds.single,
+              checkoutUrl: checkoutUrl,
+              result: 'pending',
             ),
           ),
         );

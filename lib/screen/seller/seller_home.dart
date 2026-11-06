@@ -247,7 +247,7 @@ class _SellerHomeState extends State<SellerHome> {
                         ) => IndexedStack(
                           index: _selectedTab,
                           children: <Widget>[
-                            _buildProducts(store),
+                            _buildProducts(store, productSnapshot),
                             SellerOrdersTab(
                               orders: ordersSnapshot.data,
                               loading:
@@ -323,74 +323,72 @@ class _SellerHomeState extends State<SellerHome> {
     );
   }
 
-  Widget _buildProducts(Store store) {
-    return StreamBuilder<List<Product>>(
-      stream: _productsStream,
-      builder: (BuildContext context, AsyncSnapshot<List<Product>> snapshot) {
-        if (snapshot.hasError) {
-          return Center(
-            child: Text('Unable to load products: ${snapshot.error}'),
-          );
-        }
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
+    Widget _buildProducts(
+    Store store,
+    AsyncSnapshot<List<Product>> snapshot,
+  ) {
+    if (snapshot.hasError) {
+      return Center(
+        child: Text('Unable to load products: ${snapshot.error}'),
+      );
+    }
+    if (!snapshot.hasData) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-        final List<Product> products = snapshot.data!;
-        if (products.isEmpty) {
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Text(
-                'No products yet.\nTap "Add product" to post your first one.',
-                textAlign: TextAlign.center,
-              ),
-            ),
-          );
-        }
+    final List<Product> products = snapshot.data!;
+    if (products.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            'No products yet.\nTap "Add product" to post your first one.',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
 
-        return ListView.separated(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
-          itemCount: products.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 8),
-          itemBuilder: (BuildContext context, int index) {
-            final Product product = products[index];
-            final List<String> details = <String>[
-              '₱${product.price.toStringAsFixed(2)}',
-              if (product.category.isNotEmpty) product.category,
-              if (product.stockQuantity != null)
-                product.stockQuantity == 0
-                    ? 'Out of stock'
-                    : product.stockQuantity! <= 5
-                    ? 'Low stock (${product.stockQuantity})'
-                    : '${product.stockQuantity} in stock',
-              if (!product.isAvailable) 'Hidden',
-            ];
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+      itemCount: products.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (BuildContext context, int index) {
+        final Product product = products[index];
+        final List<String> details = <String>[
+          '₱${product.price.toStringAsFixed(2)}',
+          if (product.category.isNotEmpty) product.category,
+          if (product.stockQuantity != null)
+            product.stockQuantity == 0
+                ? 'Out of stock'
+                : product.stockQuantity! <= 5
+                ? 'Low stock (${product.stockQuantity})'
+                : '${product.stockQuantity} in stock',
+          if (!product.isAvailable) 'Hidden',
+        ];
 
-            return Card(
-              margin: EdgeInsets.zero,
-              child: ListTile(
-                onTap: () => _openProductForm(store, product: product),
-                leading: ProductThumb(url: product.imageUrl),
-                title: Text(product.name),
-                subtitle: Text(details.join(' · ')),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Switch(
-                      value: product.isAvailable,
-                      onChanged: (bool v) => _setAvailability(product, v),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline),
-                      tooltip: 'Delete',
-                      onPressed: () => _confirmDelete(product),
-                    ),
-                  ],
+        return Card(
+          margin: EdgeInsets.zero,
+          child: ListTile(
+            onTap: () => _openProductForm(store, product: product),
+            leading: ProductThumb(url: product.imageUrl),
+            title: Text(product.name),
+            subtitle: Text(details.join(' · ')),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Switch(
+                  value: product.isAvailable,
+                  onChanged: (bool v) => _setAvailability(product, v),
                 ),
-              ),
-            );
-          },
+                IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  tooltip: 'Delete',
+                  onPressed: () => _confirmDelete(product),
+                ),
+              ],
+            ),
+          ),
         );
       },
     );

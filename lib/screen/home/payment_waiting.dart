@@ -20,8 +20,17 @@ class PaymentWaitingScreen extends StatefulWidget {
   final String result;
 
   static final Set<String> _activeOrderIds = <String>{};
+  static final Map<String, void Function(String)> _returnHandlers =
+      <String, void Function(String)>{};
 
   static bool isActiveFor(String orderId) => _activeOrderIds.contains(orderId);
+
+  static bool handleReturn(String orderId, String result) {
+    final void Function(String)? handler = _returnHandlers[orderId];
+    if (handler == null) return false;
+    handler(result);
+    return true;
+  }
 
   @override
   State<PaymentWaitingScreen> createState() => _PaymentWaitingScreenState();
@@ -44,6 +53,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
   bool _verificationInFlight = false;
   int _verificationAttempts = 0;
   bool _verificationExhausted = false;
+  late String _result = widget.result;
   late String? _checkoutUrl = widget.checkoutUrl;
 
   @override
@@ -51,16 +61,41 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     PaymentWaitingScreen._activeOrderIds.add(widget.orderId);
+    PaymentWaitingScreen._returnHandlers[widget.orderId] = _handleReturn;
     _subscription = _database
         .orderStream(widget.orderId)
         .listen(_handleOrder, onError: _handleError);
-    if (widget.result == 'cancel') {
+    if (_result == 'cancel') {
       _verificationExhausted = true;
     } else {
       _startTimeout();
+    }
+    if (_result == 'success') {
       _startVerification();
     }
     unawaited(_refreshOrder());
+  }
+
+  void _handleReturn(String result) {
+    if (!mounted) return;
+    if (result == 'cancel') {
+      _verificationTimer?.cancel();
+      _timeoutTimer?.cancel();
+      setState(() {
+        _result = 'cancel';
+        _verificationExhausted = true;
+        _timedOut = false;
+      });
+      return;
+    }
+    if (result == 'success') {
+      setState(() {
+        _result = 'success';
+        _timedOut = false;
+      });
+      _startTimeout();
+      _startVerification();
+    }
   }
 
   void _startVerification() {
@@ -76,7 +111,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
 
   Future<void> _verifyPayment() async {
     if (!mounted ||
-        widget.result == 'cancel' ||
+        _result != 'success' ||
         _verificationExhausted ||
         _verificationInFlight ||
         _order?.paymentStatus == 'paid') {
@@ -170,11 +205,22 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('[PAYMENT] App resumed; refreshing order ${widget.orderId}');
-      _startTimeout();
-      unawaited(_refreshOrder());
-      if (widget.result != 'cancel') unawaited(_verifyPayment());
+      unawaited(_handleResume());
     }
+  }
+
+  Future<void> _handleResume() async {
+    debugPrint('[PAYMENT] App resumed; refreshing order ${widget.orderId}');
+    await _refreshOrder();
+    if (!mounted || _result == 'cancel' || _order?.paymentStatus != 'pending') {
+      return;
+    }
+    setState(() {
+      _result = 'success';
+      _timedOut = false;
+    });
+    _startTimeout();
+    _startVerification();
   }
 
   Future<void> _reopenPaymentPage() async {
@@ -223,7 +269,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
       _timedOut = false;
     });
     _startTimeout();
-    _startVerification();
+    if (_result == 'success') _startVerification();
     _subscription?.cancel();
     _subscription = _database
         .orderStream(widget.orderId)
@@ -234,7 +280,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
   Widget build(BuildContext context) {
     final Order? order = _order;
     final Widget body;
-    if (widget.result == 'cancel') {
+    if (_result == 'cancel') {
       body = _messageState(
         Icons.cancel_outlined,
         'Payment cancelled.',
@@ -375,6 +421,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     PaymentWaitingScreen._activeOrderIds.remove(widget.orderId);
+    PaymentWaitingScreen._returnHandlers.remove(widget.orderId);
     _timeoutTimer?.cancel();
     _verificationTimer?.cancel();
     _subscription?.cancel();
