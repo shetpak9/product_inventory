@@ -235,9 +235,18 @@
         ".write": "auth != null && auth.uid === $sellerId && root.child('users').child(auth.uid).child('role').val() === 'seller'",
         "$code": {
           ".validate": "newData.hasChildren(['sellerId', 'code', 'type', 'value', 'startsAt', 'endsAt', 'minOrderAmount', 'usageCount']) && newData.child('sellerId').val() === $sellerId && newData.child('code').val() === $code && (newData.child('type').val() === 'percentage' || newData.child('type').val() === 'fixed') && newData.child('value').isNumber() && newData.child('value').val() > 0 && newData.child('value').val() <= 1000000 && newData.child('startsAt').isNumber() && newData.child('endsAt').isNumber() && newData.child('endsAt').val() > newData.child('startsAt').val() && newData.child('minOrderAmount').isNumber() && newData.child('minOrderAmount').val() >= 0 && newData.child('usageCount').isNumber() && newData.child('usageCount').val() >= 0 && (!newData.child('usageLimit').exists() || (newData.child('usageLimit').isNumber() && newData.child('usageLimit').val() > 0))",
-          "$other": {
-            ".validate": false
-          }
+          "sellerId": { ".validate": "newData.isString()" },
+          "code": { ".validate": "newData.isString() && newData.val().length >= 3 && newData.val().length <= 30" },
+          "type": { ".validate": "newData.val() === 'percentage' || newData.val() === 'fixed'" },
+          "value": { ".validate": "newData.isNumber() && (newData.parent().child('type').val() !== 'percentage' || newData.val() <= 100)" },
+          "startsAt": { ".validate": "newData.isNumber()" },
+          "endsAt": { ".validate": "newData.isNumber()" },
+          "minOrderAmount": { ".validate": "newData.isNumber()" },
+          "usageCount": { ".validate": "newData.isNumber()" },
+          "usageLimit": { ".validate": "newData.isNumber()" },
+          "productId": { ".validate": "newData.isString() && newData.val().length <= 128" },
+          "updatedAt": { ".validate": "newData.isNumber()" },
+          "$other": { ".validate": false }
         }
       }
     },
@@ -263,18 +272,6 @@
           "createdAt": { ".validate": "newData.isNumber()" },
           "read": { ".validate": "newData.isBoolean()" },
           "$other": { ".validate": false }
-        }
-      }
-    },
-    "reviews": {
-      ".read": "auth != null",
-      "$productId": {
-        "$orderId": {
-          ".write": "auth != null && ((!data.exists() && newData.exists() && root.child('orders').child($orderId).child('customerId').val() === auth.uid && root.child('orders').child($orderId).child('status').val() === 'delivered' && root.child('orders').child($orderId).child('reviewableProductIds').child($productId).val() === true) || (data.exists() && data.child('customerId').val() === auth.uid && root.child('orders').child($orderId).child('status').val() === 'delivered'))",
-          ".validate": "newData.hasChildren(['productId', 'orderId', 'customerId', 'customerName', 'rating', 'comment', 'createdAt', 'updatedAt']) && newData.child('productId').val() === $productId && newData.child('orderId').val() === $orderId && newData.child('customerId').val() === auth.uid && newData.child('customerName').isString() && newData.child('customerName').val().length > 0 && newData.child('customerName').val().length <= 100 && newData.child('rating').isNumber() && newData.child('rating').val() % 1 === 0 && newData.child('rating').val() >= 1 && newData.child('rating').val() <= 5 && newData.child('comment').isString() && newData.child('comment').val().length <= 500 && newData.child('createdAt').isNumber() && newData.child('updatedAt').isNumber() && (!data.exists() || (newData.child('productId').val() === data.child('productId').val() && newData.child('orderId').val() === data.child('orderId').val() && newData.child('customerId').val() === data.child('customerId').val() && newData.child('createdAt').val() === data.child('createdAt').val()))",
-          "$other": {
-            ".validate": false
-          }
         }
       }
     },
@@ -421,11 +418,6 @@
           ".write": "auth != null && ((!data.exists() && newData.val() === true && newData.parent().child('customerId').val() === auth.uid) || (data.val() === true && newData.val() === false && newData.parent().child('status').val() === 'cancelled' && (newData.parent().child('customerId').val() === auth.uid || newData.parent().child('sellerId').val() === auth.uid)))",
           ".validate": "newData.isBoolean() && (!data.exists() || newData.val() === data.val() || (data.val() === true && newData.val() === false && newData.parent().child('status').val() === 'cancelled'))"
         },
-        "reviewableProductIds": {
-          "$productId": {
-            ".validate": "newData.val() === true && (!data.exists() || newData.val() === data.val())"
-          }
-        },
         "paymentMethod": {
           ".validate": "newData.isString() && (newData.val() === 'cash' || newData.val() === 'paymongo') && (!data.exists() || newData.val() === data.val())"
         },
@@ -454,6 +446,41 @@
       "$uid": {
         ".read": "auth != null && auth.uid === $uid",
         ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+    "activity_logs": {
+      ".indexOn": ["createdAt"],
+      ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
+      "$logId": {
+        ".write": "auth != null && !data.exists() && newData.exists() && newData.child('userUid').val() === auth.uid",
+        ".validate": "newData.hasChildren(['userUid', 'userName', 'userRole', 'action', 'createdAt']) && newData.child('userUid').isString() && newData.child('userUid').val() === auth.uid && newData.child('userName').isString() && newData.child('userName').val().length <= 100 && newData.child('userRole').isString() && newData.child('userRole').val() === root.child('users').child(auth.uid).child('role').val() && (newData.child('userRole').val() === 'customer' || newData.child('userRole').val() === 'seller' || newData.child('userRole').val() === 'admin') && newData.child('action').isString() && (newData.child('action').val() === 'auth.registered' || newData.child('action').val() === 'auth.login' || newData.child('action').val() === 'auth.logout' || newData.child('action').val() === 'auth.password_reset_requested' || newData.child('action').val() === 'profile.created' || newData.child('action').val() === 'profile.updated' || newData.child('action').val() === 'profile.address_added' || newData.child('action').val() === 'profile.address_updated' || newData.child('action').val() === 'profile.address_deleted' || newData.child('action').val() === 'cart.item_added' || newData.child('action').val() === 'cart.item_removed' || newData.child('action').val() === 'cart.quantity_updated' || newData.child('action').val() === 'order.created' || newData.child('action').val() === 'order.cancelled' || newData.child('action').val() === 'payment.checkout_initiated' || newData.child('action').val() === 'payment.checkout_opened' || newData.child('action').val() === 'payment.returned_from_checkout' || newData.child('action').val() === 'product.created' || newData.child('action').val() === 'product.updated' || newData.child('action').val() === 'product.deleted' || newData.child('action').val() === 'seller.order_status_updated' || newData.child('action').val() === 'seller.profile_updated') && newData.child('createdAt').isNumber()",
+        "userUid": {
+          ".write": false
+        },
+        "userName": {
+          ".write": false
+        },
+        "userRole": {
+          ".write": false
+        },
+        "action": {
+          ".write": false
+        },
+        "entityType": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 40"
+        },
+        "entityId": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 128"
+        },
+        "details": {
+          ".validate": "newData.hasChildren()"
+        },
+        "createdAt": {
+          ".write": false
+        },
+        "$other": {
+          ".validate": false
+        }
       }
     }
   }

@@ -6,6 +6,7 @@ import 'package:product_inventory/screen/home/my_orders.dart';
 import 'package:product_inventory/screen/home/order_confirmation.dart';
 import 'package:product_inventory/service/database.dart';
 import 'package:product_inventory/service/payment_service.dart';
+import 'package:product_inventory/services/activity_log_service.dart';
 
 class PaymentWaitingScreen extends StatefulWidget {
   const PaymentWaitingScreen({
@@ -40,6 +41,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
     with WidgetsBindingObserver {
   final DatabaseService _database = DatabaseService();
   final PaymentService _payments = PaymentService();
+  final ActivityLogService _activityLog = ActivityLogService();
   StreamSubscription<Order?>? _subscription;
   Timer? _timeoutTimer;
   Timer? _verificationTimer;
@@ -53,6 +55,7 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
   bool _verificationInFlight = false;
   int _verificationAttempts = 0;
   bool _verificationExhausted = false;
+  bool _returnLogged = false;
   late String _result = widget.result;
   late String? _checkoutUrl = widget.checkoutUrl;
 
@@ -78,6 +81,17 @@ class _PaymentWaitingScreenState extends State<PaymentWaitingScreen>
 
   void _handleReturn(String result) {
     if (!mounted) return;
+    if (!_returnLogged) {
+      _returnLogged = true;
+      unawaited(
+        _activityLog.logActivity(
+          action: 'payment.returned_from_checkout',
+          entityType: 'order',
+          entityId: widget.orderId,
+          details: <String, dynamic>{'result': result},
+        ),
+      );
+    }
     if (result == 'cancel') {
       _verificationTimer?.cancel();
       _timeoutTimer?.cancel();

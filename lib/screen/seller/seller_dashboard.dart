@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:product_inventory/model/order.dart';
 import 'package:product_inventory/model/product.dart';
 import 'package:product_inventory/screen/seller/seller_orders.dart';
+import 'package:product_inventory/screen/seller/stock_management.dart';
 import 'package:product_inventory/shared/app_theme.dart';
+import 'package:product_inventory/shared/product_thumb.dart';
 
 class SellerDashboardTab extends StatefulWidget {
   const SellerDashboardTab({
@@ -10,17 +12,21 @@ class SellerDashboardTab extends StatefulWidget {
     required this.orders,
     this.products = const <Product>[],
     required this.loading,
+    this.onManageStock = _ignoreStockManagement,
     this.error,
   });
 
   final List<Order>? orders;
   final List<Product>? products;
   final bool loading;
+  final ValueChanged<Product> onManageStock;
   final Object? error;
 
   @override
   State<SellerDashboardTab> createState() => _SellerDashboardTabState();
 }
+
+void _ignoreStockManagement(Product product) {}
 
 class _SellerDashboardTabState extends State<SellerDashboardTab> {
   DateTimeRange? _dateRange;
@@ -77,6 +83,20 @@ class _SellerDashboardTabState extends State<SellerDashboardTab> {
         .length;
     final int completedOrders = rangeOrders
         .where((Order order) => order.status == OrderStatus.delivered)
+        .length;
+    final List<Product> products = widget.products ?? <Product>[];
+    final int inStockCount = products
+        .where((Product product) => stockStatus(product) == StockStatus.inStock)
+        .length;
+    final int lowStockCount = products
+        .where(
+          (Product product) => stockStatus(product) == StockStatus.lowStock,
+        )
+        .length;
+    final int outOfStockCount = products
+        .where(
+          (Product product) => stockStatus(product) == StockStatus.outOfStock,
+        )
         .length;
     final double totalSales = confirmedOrders.fold<double>(
       0,
@@ -145,6 +165,45 @@ class _SellerDashboardTabState extends State<SellerDashboardTab> {
                   width: cardWidth,
                   label: 'Completed',
                   value: '$completedOrders',
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 20),
+        Text(
+          'Inventory',
+          style: Theme.of(
+            context,
+          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 12),
+        LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            final double cardWidth = (constraints.maxWidth - 12) / 2;
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: <Widget>[
+                _MetricCard(
+                  width: cardWidth,
+                  label: 'Total products',
+                  value: '${products.length}',
+                ),
+                _MetricCard(
+                  width: cardWidth,
+                  label: 'In stock',
+                  value: '$inStockCount',
+                ),
+                _MetricCard(
+                  width: cardWidth,
+                  label: 'Low stock',
+                  value: '$lowStockCount',
+                ),
+                _MetricCard(
+                  width: cardWidth,
+                  label: 'Out of stock',
+                  value: '$outOfStockCount',
                 ),
               ],
             );
@@ -282,11 +341,17 @@ class _SellerDashboardTabState extends State<SellerDashboardTab> {
               : Column(
                   children: lowStockProducts.take(8).map((Product product) {
                     return ListTile(
+                      leading: ProductThumb(url: product.imageUrl, size: 44),
                       title: Text(product.name),
-                      trailing: Text(
-                        product.stockQuantity == 0
-                            ? 'Out of stock'
-                            : '${product.stockQuantity} left',
+                      subtitle: Text(
+                        '${product.stockQuantity} units · ${stockStatusLabel(product)}',
+                        style: TextStyle(
+                          color: stockStatusColor(context, product),
+                        ),
+                      ),
+                      trailing: TextButton(
+                        onPressed: () => widget.onManageStock(product),
+                        child: const Text('Manage stock'),
                       ),
                     );
                   }).toList(),

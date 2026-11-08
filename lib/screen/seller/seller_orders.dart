@@ -208,6 +208,7 @@ class _SellerOrderDetailScreenState extends State<SellerOrderDetailScreen> {
   }
 
   Widget _buildOrder(BuildContext context, Order order) {
+    final Color textColor = Theme.of(context).colorScheme.onSurface;
     final List<OrderStatus> availableStatuses = nextStatuses(
       order.status,
       fulfillmentType: order.fulfillment.type,
@@ -224,22 +225,38 @@ class _SellerOrderDetailScreenState extends State<SellerOrderDetailScreen> {
         const SizedBox(height: 8),
         _StatusChip(status: order.status),
         const SizedBox(height: 20),
-        const Text('Items', style: TextStyle(fontWeight: FontWeight.w600)),
+        Text(
+          'Items',
+          style: TextStyle(fontWeight: FontWeight.w600, color: textColor),
+        ),
         for (final OrderItem item in order.items)
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: ProductThumb(url: item.imageUrl),
-            title: Text(item.productName),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  '${formatPeso(item.price + item.priceAdjustment)} × ${item.quantity}',
-                ),
-                OptionSummary(options: item.selectedOptions),
-              ],
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: ProductThumb(url: item.imageUrl),
+              title: Text(
+                item.productName.trim().isEmpty
+                    ? 'Product unavailable'
+                    : item.productName,
+                style: TextStyle(color: textColor),
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    '${formatPeso(item.price + item.priceAdjustment)} × ${item.quantity}',
+                    style: TextStyle(color: textColor),
+                  ),
+                  OptionSummary(options: item.selectedOptions),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Subtotal: ${formatPeso(item.lineTotal)}',
+                    style: TextStyle(color: textColor),
+                  ),
+                ],
+              ),
             ),
-            trailing: Text(formatPeso(item.lineTotal)),
           ),
         if (order.note != null && order.note!.isNotEmpty) ...<Widget>[
           const Divider(),

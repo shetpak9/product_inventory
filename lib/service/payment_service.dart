@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:product_inventory/services/activity_log_service.dart';
 
 class PaymentService {
   PaymentService({http.Client? client}) : _client = client ?? http.Client();
@@ -14,6 +15,7 @@ class PaymentService {
     'PAYMENTS_BASE_URL',
   );
   final http.Client _client;
+  final ActivityLogService _activityLog = ActivityLogService();
 
   String get _baseUrl {
     if (_configuredBaseUrl.isNotEmpty) return _configuredBaseUrl;
@@ -204,6 +206,13 @@ class PaymentService {
       if (url == null || !url.startsWith('https://')) {
         throw StateError('PayMongo returned an invalid checkout URL.');
       }
+      unawaited(
+        _activityLog.logActivity(
+          action: 'payment.checkout_initiated',
+          entityType: 'order',
+          entityId: orderId,
+        ),
+      );
       return url;
     } on TimeoutException {
       debugPrint('[CHECKOUT] Backend checkout request timed out');
@@ -272,7 +281,14 @@ class PaymentService {
     }
   }
 
-  Future<bool> openCheckout(String url) {
-    return launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  Future<bool> openCheckout(String url) async {
+    final bool opened = await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+    if (opened) {
+      unawaited(_activityLog.logActivity(action: 'payment.checkout_opened'));
+    }
+    return opened;
   }
 }

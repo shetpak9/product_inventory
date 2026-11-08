@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -7,10 +9,10 @@ import 'package:product_inventory/model/cart.dart';
 import 'package:product_inventory/model/order.dart';
 import 'package:product_inventory/model/notification.dart';
 import 'package:product_inventory/model/product.dart';
-import 'package:product_inventory/model/review.dart';
 import 'package:product_inventory/model/promotion.dart';
 import 'package:product_inventory/model/store.dart';
 import 'package:product_inventory/model/user.dart';
+import 'package:product_inventory/services/activity_log_service.dart';
 
 class ProductDailyLimitException implements Exception {
   const ProductDailyLimitException({
@@ -45,6 +47,7 @@ class DatabaseService {
   }
 
   final FirebaseDatabase? _database;
+  final ActivityLogService _activityLog = ActivityLogService();
 
   DatabaseReference get _db {
     final FirebaseDatabase? db = _database;
@@ -79,6 +82,13 @@ class DatabaseService {
     // set() completes only after the server accepts the write, and throws if
     // the security rules reject it, so no read-back is needed.
     await _db.child('users').child(user.uid).set(user.toMap());
+    unawaited(
+      _activityLog.logActivity(
+        action: 'profile.created',
+        entityType: 'profile',
+        entityId: user.uid,
+      ),
+    );
   }
 
   Future<UserData?> getUserProfile(String uid) async {
@@ -92,12 +102,19 @@ class DatabaseService {
     required String firstName,
     required String lastName,
     required String phone,
-  }) {
-    return _db.child('users').child(uid).update(<String, Object?>{
+  }) async {
+    await _db.child('users').child(uid).update(<String, Object?>{
       'firstName': firstName.trim(),
       'lastName': lastName.trim(),
       'phone': phone.trim().isEmpty ? null : phone.trim(),
     });
+    unawaited(
+      _activityLog.logActivity(
+        action: 'profile.updated',
+        entityType: 'profile',
+        entityId: uid,
+      ),
+    );
   }
 
   Stream<List<Address>> addressesStream(String uid) {
@@ -174,6 +191,13 @@ class DatabaseService {
       }
     }
     await _db.update(updates);
+    unawaited(
+      _activityLog.logActivity(
+        action: isNew ? 'profile.address_added' : 'profile.address_updated',
+        entityType: 'address',
+        entityId: id,
+      ),
+    );
     return id;
   }
 
@@ -201,6 +225,13 @@ class DatabaseService {
       }
     }
     await _db.update(updates);
+    unawaited(
+      _activityLog.logActivity(
+        action: 'profile.address_deleted',
+        entityType: 'address',
+        entityId: addressId,
+      ),
+    );
   }
 
   Future<void> setDefaultAddress(String uid, String addressId) async {
@@ -379,57 +410,6 @@ class DatabaseService {
     });
   }
 
-  Stream<List<ProductReview>> reviewsStream(String productId) {
-    return _db.child('reviews').child(productId).onValue.map((
-      DatabaseEvent event,
-    ) {
-      final Object? raw = event.snapshot.value;
-      if (raw is! Map) return <ProductReview>[];
-      final List<ProductReview> reviews = raw.entries
-          .where((MapEntry<dynamic, dynamic> entry) => entry.value is Map)
-          .map(
-            (MapEntry<dynamic, dynamic> entry) =>
-                ProductReview.fromMap(entry.value as Map, entry.key.toString()),
-          )
-          .toList();
-      reviews.sort(
-        (ProductReview a, ProductReview b) =>
-            (b.createdAt ?? 0).compareTo(a.createdAt ?? 0),
-      );
-      return reviews;
-    });
-  }
-
-  Future<void> saveReview(ProductReview review) async {
-    final String? uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null || uid != review.customerId) {
-      throw StateError('A signed-in customer is required to save a review.');
-    }
-    final DatabaseReference reviewRef = _db
-        .child('reviews')
-        .child(review.productId)
-        .child(review.orderId);
-    final DataSnapshot existing = await reviewRef.get();
-    await reviewRef.set(<String, Object?>{
-      ...review.toMap(includeCreatedAt: existing.exists),
-      if (!existing.exists) 'createdAt': ServerValue.timestamp,
-      'updatedAt': ServerValue.timestamp,
-    });
-  }
-
-  Future<void> deleteReview(ProductReview review) async {
-    final String? uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null || uid != review.customerId) {
-      throw StateError('You can only delete your own review.');
-    }
-
-    await _db
-        .child('reviews')
-        .child(review.productId)
-        .child(review.orderId)
-        .remove();
-  }
-
   Stream<List<Promotion>> promotionsStream(String sellerId) {
     return _db.child('promotions').child(sellerId).onValue.map((
       DatabaseEvent event,
@@ -501,8 +481,60 @@ class DatabaseService {
     });
   }
 
-  Future<void> deleteProduct(String productId) {
-    return productRef.child(productId).remove();
+  Future<int?> updateStockQuantity(String productId, int quantity) async {
+    if (quantity < 0 || quantity > 1000000) {
+      throw ArgumentError.value(
+        quantity,
+        'quantity',
+        'Must be 0 to 1,000,000.',
+      );
+    }
+    final User? user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('A signed-in seller is required to update stock.');
+    }
+    final DatabaseReference product = productRef.child(productId);
+    final DataSnapshot snapshot = await product.get();
+    final Object? raw = snapshot.value;
+    if (raw is! Map) {
+      throw StateError('This product no longer exists.');
+    }
+    if (raw['sellerId']?.toString() != user.uid) {
+      throw StateError('You can only update stock for your own products.');
+    }
+    final int? previousQuantity = (raw['stockQuantity'] as num?)?.toInt();
+    final TransactionResult result = await product
+        .child('stockQuantity')
+        .runTransaction(
+          (Object? value) => Transaction.success(quantity),
+          applyLocally: false,
+        );
+    if (!result.committed) {
+      throw StateError('Stock was changed by another update. Try again.');
+    }
+    unawaited(
+      _activityLog.logActivity(
+        action: 'product.updated',
+        entityType: 'product',
+        entityId: productId,
+        details: <String, dynamic>{
+          'previousStockQuantity': previousQuantity,
+          'updatedStockQuantity': quantity,
+        },
+      ),
+    );
+    return previousQuantity;
+  }
+
+  Future<void> deleteProduct(String productId) async {
+    await productRef.child(productId).remove();
+    unawaited(
+      _activityLog.logActivity(
+        action: 'product.deleted',
+        entityType: 'product',
+        entityId: productId,
+      ),
+    );
   }
 
   // ----------------------------------------------------------------- cart
@@ -626,9 +658,6 @@ class DatabaseService {
         orderIds.add(orderId);
         updates['orders/$orderId'] = <String, Object?>{
           ...order.toMap(),
-          'reviewableProductIds': <String, bool>{
-            for (final OrderItem item in order.items) item.productId: true,
-          },
           'stockDeducted': order.items.any(
             (OrderItem item) => stockProductIds.contains(item.productId),
           ),
@@ -649,6 +678,20 @@ class DatabaseService {
           );
         }
         rethrow;
+      }
+      for (int index = 0; index < orders.length; index++) {
+        final Order order = orders[index];
+        unawaited(
+          _activityLog.logActivity(
+            action: 'order.created',
+            entityType: 'order',
+            entityId: orderIds[index],
+            details: <String, dynamic>{
+              'paymentMethod': order.paymentMethod,
+              'total': order.total,
+            },
+          ),
+        );
       }
       return orderIds;
     } catch (error) {
@@ -757,23 +800,24 @@ class DatabaseService {
   }
 
   Future<void> updateOrderStatus(String orderId, OrderStatus status) async {
-    Order? order;
-    {
-      final DataSnapshot snapshot = await _db
-          .child('orders')
-          .child(orderId)
-          .get();
-      final Object? raw = snapshot.value;
-      if (raw is Map) {
-        order = Order.fromMap(raw, orderId);
-      }
+    final DataSnapshot snapshot = await _db
+        .child('orders')
+        .child(orderId)
+        .get();
+    final Object? raw = snapshot.value;
+    if (raw is! Map) {
+      throw StateError('This order is no longer available.');
     }
-    final Map<String, Object?> updates = <String, Object?>{
-      'orders/$orderId/status': status.dbValue,
-      'orders/$orderId/updatedAt': ServerValue.timestamp,
-    };
-    final String? customerId = order?.customerId;
-    if (customerId != null) {
+    final Order order = Order.fromMap(raw, orderId);
+    final Map<String, Object?> updates = <String, Object?>{};
+    final bool statusChanged = order.status != status;
+    if (statusChanged) {
+      updates['orders/$orderId/status'] = status.dbValue;
+    }
+    if (updates.isEmpty) return;
+    updates['orders/$orderId/updatedAt'] = ServerValue.timestamp;
+    final String customerId = order.customerId;
+    if (statusChanged && customerId.isNotEmpty) {
       updates['notifications/$customerId/order_${orderId}_status_${status.dbValue}'] =
           <String, Object?>{
             'type': status == OrderStatus.cancelled
@@ -783,19 +827,28 @@ class DatabaseService {
                 ? 'Order cancelled'
                 : 'Order update',
             'body': status == OrderStatus.cancelled
-                ? 'Your order from ${order!.storeName} was cancelled.'
-                : 'Your order from ${order!.storeName} is now ${status.label}.',
+                ? 'Your order from ${order.storeName} was cancelled.'
+                : 'Your order from ${order.storeName} is now ${status.label}.',
             'orderId': orderId,
             'createdAt': ServerValue.timestamp,
             'read': false,
           };
     }
     await _db.update(updates);
-    final Order? cancelledOrder = order;
-    if (status == OrderStatus.cancelled &&
-        cancelledOrder?.stockDeducted == true) {
+    unawaited(
+      _activityLog.logActivity(
+        action: status == OrderStatus.cancelled
+            ? 'order.cancelled'
+            : 'seller.order_status_updated',
+        entityType: 'order',
+        entityId: orderId,
+        details: <String, dynamic>{'status': status.dbValue},
+      ),
+    );
+    final Order cancelledOrder = order;
+    if (status == OrderStatus.cancelled && cancelledOrder.stockDeducted) {
       final Map<String, int> quantities = <String, int>{};
-      for (final OrderItem item in cancelledOrder!.items) {
+      for (final OrderItem item in cancelledOrder.items) {
         quantities.update(
           item.productId,
           (int quantity) => quantity + item.quantity,
@@ -821,7 +874,6 @@ class DatabaseService {
       });
     }
     if (status != OrderStatus.cancelled ||
-        cancelledOrder == null ||
         !RegExp(
           r'^\d{4}-\d{2}-\d{2}$',
         ).hasMatch(cancelledOrder.fulfillment.date)) {

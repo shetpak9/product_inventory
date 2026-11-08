@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:product_inventory/model/address.dart';
 import 'package:product_inventory/model/user.dart';
 import 'package:product_inventory/service/auth_service.dart';
 import 'package:product_inventory/service/database.dart';
+import 'package:product_inventory/services/activity_log_service.dart';
 import 'package:product_inventory/shared/messenger.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -278,6 +281,7 @@ class EditProfileScreen extends StatefulWidget {
 class _EditProfileScreenState extends State<EditProfileScreen> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final DatabaseService _database = DatabaseService();
+  final ActivityLogService _activityLog = ActivityLogService();
   late final TextEditingController _firstNameController = TextEditingController(
     text: widget.profile.firstName,
   );
@@ -326,6 +330,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         lastName: _lastNameController.text,
         phone: _phoneController.text,
       );
+      if (widget.profile.role == UserRole.seller) {
+        unawaited(
+          _activityLog.logActivity(
+            action: 'seller.profile_updated',
+            entityType: 'profile',
+            entityId: widget.uid,
+          ),
+        );
+      }
       if (!mounted) return;
       Navigator.of(context).pop();
     } catch (error) {

@@ -993,7 +993,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                               if (groups.length == 1)
                                 const ButtonSegment<String>(
                                   value: 'paymongo',
-                                  label: Text('PayMongo'),
+                                  label: Text('Online Payment'),
                                   icon: Icon(Icons.credit_card_outlined),
                                 ),
                             ],
@@ -1007,8 +1007,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                           const SizedBox(height: 4),
                           Text(
                             groups.length > 1
-                                ? 'PayMongo is available for one seller order at a time.'
-                                : 'PayMongo is a test checkout; payment is confirmed by webhook.',
+                                ? 'Online Payment is available for one seller order at a time.'
+                                : '',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
@@ -1035,7 +1035,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               const SizedBox(height: 12),
               Text(
                 _paymentMethod == 'paymongo'
-                    ? 'PayMongo test checkout opens in your browser. Returning to the app does not confirm payment; only a verified webhook does.'
+                    ? ''
                     : 'Cash on delivery/pickup. No payment is processed in the app.',
               ),
               const SizedBox(height: 16),

@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:product_inventory/model/user.dart';
 import 'package:product_inventory/service/database.dart';
+import 'package:product_inventory/services/activity_log_service.dart';
 
 /// Turns auth/database exceptions into messages that are safe to show.
 String friendlyAuthError(Object error) {
@@ -41,6 +44,7 @@ class AuthService {
 
   final FirebaseAuth? _auth;
   final DatabaseService? _injectedDatabase;
+  final ActivityLogService _activityLog = ActivityLogService();
   late final DatabaseService _database = _injectedDatabase ?? DatabaseService();
 
   UserId? _userFromFirebaseUser(User? user) {
@@ -68,7 +72,17 @@ class AuthService {
       email: email.trim(),
       password: password.trim(),
     );
-    return _userFromFirebaseUser(result.user);
+    final UserId? signedInUser = _userFromFirebaseUser(result.user);
+    if (signedInUser != null) {
+      unawaited(
+        _activityLog.logActivity(
+          action: 'auth.login',
+          entityType: 'user',
+          entityId: signedInUser.uid,
+        ),
+      );
+    }
+    return signedInUser;
   }
 
   /// Creates the auth user AND the profile (with role). If the profile write
@@ -112,6 +126,13 @@ class AuthService {
       }
       rethrow;
     }
+    unawaited(
+      _activityLog.logActivity(
+        action: 'auth.registered',
+        entityType: 'user',
+        entityId: user.uid,
+      ),
+    );
     return UserId(uid: user.uid);
   }
 
@@ -120,6 +141,7 @@ class AuthService {
     if (auth == null) {
       return;
     }
+    unawaited(_activityLog.logActivity(action: 'auth.logout'));
     await auth.signOut();
   }
 
@@ -129,6 +151,9 @@ class AuthService {
       throw StateError('Firebase is not available in this environment.');
     }
     await auth.sendPasswordResetEmail(email: email.trim());
+    unawaited(
+      _activityLog.logActivity(action: 'auth.password_reset_requested'),
+    );
   }
 
   Future<void> reauthenticate(String password) async {

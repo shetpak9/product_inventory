@@ -11,6 +11,7 @@ import 'package:product_inventory/screen/seller/promotions.dart';
 import 'package:product_inventory/screen/seller/seller_dashboard.dart';
 import 'package:product_inventory/screen/seller/seller_orders.dart';
 import 'package:product_inventory/screen/seller/store_setup.dart';
+import 'package:product_inventory/screen/seller/stock_management.dart';
 import 'package:product_inventory/service/auth_service.dart';
 import 'package:product_inventory/service/database.dart';
 import 'package:product_inventory/service/order_notifier.dart';
@@ -100,6 +101,15 @@ class _SellerHomeState extends State<SellerHome> {
         ),
       ),
     );
+  }
+
+  Future<void> _manageStock(Product product) async {
+    final bool? updated = await showStockManagementDialog(context, product);
+    if (updated == true && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('${product.name} stock updated.')));
+    }
   }
 
   void _showError(String message) {
@@ -260,6 +270,7 @@ class _SellerHomeState extends State<SellerHome> {
                             SellerDashboardTab(
                               orders: ordersSnapshot.data,
                               products: productSnapshot.data,
+                              onManageStock: _manageStock,
                               loading:
                                   ordersSnapshot.connectionState ==
                                       ConnectionState.waiting &&
@@ -323,14 +334,9 @@ class _SellerHomeState extends State<SellerHome> {
     );
   }
 
-    Widget _buildProducts(
-    Store store,
-    AsyncSnapshot<List<Product>> snapshot,
-  ) {
+  Widget _buildProducts(Store store, AsyncSnapshot<List<Product>> snapshot) {
     if (snapshot.hasError) {
-      return Center(
-        child: Text('Unable to load products: ${snapshot.error}'),
-      );
+      return Center(child: Text('Unable to load products: ${snapshot.error}'));
     }
     if (!snapshot.hasData) {
       return const Center(child: CircularProgressIndicator());
@@ -358,12 +364,14 @@ class _SellerHomeState extends State<SellerHome> {
         final List<String> details = <String>[
           '₱${product.price.toStringAsFixed(2)}',
           if (product.category.isNotEmpty) product.category,
-          if (product.stockQuantity != null)
-            product.stockQuantity == 0
-                ? 'Out of stock'
-                : product.stockQuantity! <= 5
-                ? 'Low stock (${product.stockQuantity})'
-                : '${product.stockQuantity} in stock',
+          'Stock: ${product.stockQuantity?.toString() ?? 'Not Tracked'} '
+              '(${product.stockQuantity == null
+                  ? 'Not Tracked'
+                  : product.stockQuantity == 0
+                  ? 'Out of Stock'
+                  : product.stockQuantity! <= 5
+                  ? 'Low Stock'
+                  : 'In Stock'})',
           if (!product.isAvailable) 'Hidden',
         ];
 
@@ -380,6 +388,11 @@ class _SellerHomeState extends State<SellerHome> {
                 Switch(
                   value: product.isAvailable,
                   onChanged: (bool v) => _setAvailability(product, v),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.inventory_outlined),
+                  tooltip: 'Manage stock',
+                  onPressed: () => _manageStock(product),
                 ),
                 IconButton(
                   icon: const Icon(Icons.delete_outline),

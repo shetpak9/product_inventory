@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:product_inventory/model/cart.dart';
@@ -7,6 +9,7 @@ import 'package:product_inventory/shared/app_theme.dart';
 import 'package:product_inventory/shared/product_thumb.dart';
 import 'package:product_inventory/shared/option_summary.dart';
 import 'package:product_inventory/service/database.dart';
+import 'package:product_inventory/services/activity_log_service.dart';
 
 /// The signed-in customer's cart. Resets itself whenever the user changes.
 class CartStore extends ChangeNotifier {
@@ -19,6 +22,7 @@ class CartStore extends ChangeNotifier {
 
   final List<CartItem> _items = <CartItem>[];
   final DatabaseService _database = DatabaseService();
+  final ActivityLogService _activityLog = ActivityLogService();
   String? _uid;
   bool _loaded = false;
 
@@ -116,6 +120,14 @@ class CartStore extends ChangeNotifier {
       final int newQuantity = _clampQuantity(existing.quantity + quantity);
       await _database.updateCartItemQuantity(uid, existing.id, newQuantity);
       _replace(existing.id, (CartItem i) => i.copyWith(quantity: newQuantity));
+      unawaited(
+        _activityLog.logActivity(
+          action: 'cart.quantity_updated',
+          entityType: 'cart_item',
+          entityId: existing.id,
+          details: <String, dynamic>{'quantity': newQuantity},
+        ),
+      );
     } else {
       final CartItem draft = CartItem(
         id: '',
@@ -131,6 +143,14 @@ class CartStore extends ChangeNotifier {
       );
       final String id = await _database.addCartItem(uid, draft);
       _items.add(draft.copyWith(id: id));
+      unawaited(
+        _activityLog.logActivity(
+          action: 'cart.item_added',
+          entityType: 'cart_item',
+          entityId: id,
+          details: <String, dynamic>{'quantity': draft.quantity},
+        ),
+      );
     }
     notifyListeners();
   }
@@ -147,6 +167,14 @@ class CartStore extends ChangeNotifier {
     final int newQuantity = _clampQuantity(quantity);
     await _database.updateCartItemQuantity(uid, itemId, newQuantity);
     _replace(itemId, (CartItem i) => i.copyWith(quantity: newQuantity));
+    unawaited(
+      _activityLog.logActivity(
+        action: 'cart.quantity_updated',
+        entityType: 'cart_item',
+        entityId: itemId,
+        details: <String, dynamic>{'quantity': newQuantity},
+      ),
+    );
     notifyListeners();
   }
 
@@ -166,6 +194,13 @@ class CartStore extends ChangeNotifier {
 
     await _database.removeCartItem(uid, itemId);
     _items.removeWhere((CartItem i) => i.id == itemId);
+    unawaited(
+      _activityLog.logActivity(
+        action: 'cart.item_removed',
+        entityType: 'cart_item',
+        entityId: itemId,
+      ),
+    );
     notifyListeners();
   }
 

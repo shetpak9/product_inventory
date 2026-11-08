@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:product_inventory/model/product.dart';
 import 'package:product_inventory/service/database.dart';
 import 'package:product_inventory/service/storage_service.dart';
+import 'package:product_inventory/services/activity_log_service.dart';
 import 'package:product_inventory/shared/constant.dart';
 import 'package:product_inventory/shared/image_picker_field.dart';
 
@@ -27,6 +29,7 @@ class ProductFormScreen extends StatefulWidget {
 class _ProductFormScreenState extends State<ProductFormScreen> {
   final DatabaseService _db = DatabaseService();
   final StorageService _storage = StorageService();
+  final ActivityLogService _activityLog = ActivityLogService();
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
   late final TextEditingController _nameController = TextEditingController(
@@ -43,7 +46,9 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     text: widget.product?.maxPerDay?.toString() ?? '',
   );
   late final TextEditingController _stockController = TextEditingController(
-    text: widget.product?.stockQuantity?.toString() ?? '0',
+    text: widget.product == null
+        ? '0'
+        : widget.product!.stockQuantity?.toString() ?? '',
   );
 
   late final String _productId = widget.product?.id ?? _db.newProductId();
@@ -52,6 +57,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       ? widget.product!.category
       : ProductCategories.all.first;
   late bool _isAvailable = widget.product?.isAvailable ?? true;
+  late bool _trackStock =
+      widget.product == null || widget.product!.stockQuantity != null;
   late List<ProductOptionGroup> _optionGroups = List<ProductOptionGroup>.of(
     widget.product?.optionGroups ?? const <ProductOptionGroup>[],
   );
@@ -76,6 +83,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    final bool isEditing = widget.product != null;
     final String? optionsError = _validateOptionGroups();
     if (optionsError != null) {
       ScaffoldMessenger.of(
@@ -109,8 +117,17 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
           maxPerDay: _maxPerDayController.text.trim().isEmpty
               ? null
               : int.parse(_maxPerDayController.text.trim()),
-          stockQuantity: int.parse(_stockController.text.trim()),
+          stockQuantity: _trackStock
+              ? int.parse(_stockController.text.trim())
+              : null,
           optionGroups: _optionGroups,
+        ),
+      );
+      unawaited(
+        _activityLog.logActivity(
+          action: isEditing ? 'product.updated' : 'product.created',
+          entityType: 'product',
+          entityId: _productId,
         ),
       );
 
@@ -250,14 +267,32 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                   },
                 ),
                 const SizedBox(height: 16),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Track stock'),
+                  subtitle: const Text(
+                    'Turn off for products with unlimited or untracked stock.',
+                  ),
+                  value: _trackStock,
+                  onChanged: _saving
+                      ? null
+                      : (bool value) => setState(() {
+                          _trackStock = value;
+                          if (value && _stockController.text.trim().isEmpty) {
+                            _stockController.text = '0';
+                          }
+                        }),
+                ),
                 TextFormField(
                   controller: _stockController,
+                  enabled: _trackStock && !_saving,
                   decoration: textInputDecoration.copyWith(
                     hintText: 'Stock quantity',
                     helperText: 'Set to 0 to mark the product out of stock.',
                   ),
                   keyboardType: TextInputType.number,
                   validator: (String? value) {
+                    if (!_trackStock) return null;
                     final int? stock = int.tryParse((value ?? '').trim());
                     if (stock == null || stock < 0 || stock > 1000000) {
                       return 'Enter a whole number from 0 to 1,000,000';
